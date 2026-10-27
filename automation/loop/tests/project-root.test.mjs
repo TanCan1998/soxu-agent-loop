@@ -1,15 +1,40 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolve } from "node:path";
-import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const config = fileURLToPath(new URL("../src/config.mjs", import.meta.url));
+const toolRoot = fileURLToPath(new URL("../../../", import.meta.url));
+
+test("package scripts expose the documented agent:* entry points", async () => {
+  const pkg = JSON.parse(await readFile(join(toolRoot, "package.json"), "utf8"));
+  assert.equal(pkg.scripts["agent:dashboard"], "node automation/loop/src/dashboard-cli.mjs");
+  for (const command of ["start", "loop", "watch", "status", "doctor", "models", "update", "cleanup", "seed-issues"]) {
+    assert.equal(pkg.scripts["agent:" + command], "node automation/loop/src/cli.mjs " + command, command);
+  }
+  assert.equal(pkg.scripts.agent, "node automation/loop/src/cli.mjs");
+});
 const probe = (value) => spawnSync(process.execPath, ["--input-type=module", "-e", `import {ROOT, TOOL_ROOT} from ${JSON.stringify(new URL("../src/config.mjs", import.meta.url).href)}; console.log(JSON.stringify({ROOT, TOOL_ROOT}))`], {
   env: { ...process.env, SOXU_PROJECT_ROOT: value }, encoding: "utf8",
+});
+
+test("project root prefers the env var and falls back to a sibling checkout", async () => {
+  const { pickProjectRoot } = await import(pathToFileURL(config).href);
+  const toolRoot = resolve("soxu-agent-loop");
+  const explicit = resolve("soxu-project");
+  assert.deepEqual(pickProjectRoot({ value: explicit, toolRoot, exists: () => true }), { root: explicit, source: "env" });
+  // A relative or empty override must never silently fall back.
+  for (const value of ["relative-project", ""]) {
+    assert.throws(() => pickProjectRoot({ value, toolRoot, exists: () => true }), /must be a non-empty absolute path/);
+  }
+  const sibling = pickProjectRoot({ value: undefined, toolRoot, exists: path => path.endsWith(".git") });
+  assert.equal(sibling.source, "sibling");
+  assert.equal(sibling.root, resolve(toolRoot, "..", "SOXU"));
+  assert.throws(() => pickProjectRoot({ value: undefined, toolRoot, exists: () => false }), /SOXU_PROJECT_ROOT is required/);
 });
 
 test("explicit project root is independent from tool installation", () => {

@@ -1,14 +1,28 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { isAbsolute, resolve, join } from "node:path";
-import { readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 export const TOOL_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
-const projectRoot = process.env.SOXU_PROJECT_ROOT;
-if (projectRoot !== undefined && (!projectRoot || !isAbsolute(projectRoot))) {
-  throw new Error("SOXU_PROJECT_ROOT must be a non-empty absolute path");
+
+/**
+ * Resolve the target project. An explicit SOXU_PROJECT_ROOT always wins and must be an
+ * absolute path; otherwise fall back to the sibling SOXU checkout so that
+ * `pnpm agent:dashboard` works directly from the tool repository root.
+ * Anything else fails closed: a wrong target silently would touch the wrong repo.
+ */
+export function pickProjectRoot({ value, toolRoot = TOOL_ROOT, exists = existsSync } = {}) {
+  if (value !== undefined) {
+    if (!value || !isAbsolute(value)) throw new Error("SOXU_PROJECT_ROOT must be a non-empty absolute path");
+    return { root: resolve(value), source: "env" };
+  }
+  const sibling = resolve(toolRoot, "..", "SOXU");
+  if (exists(join(sibling, ".git"))) return { root: sibling, source: "sibling" };
+  throw new Error("SOXU_PROJECT_ROOT is required for the standalone agent loop (no sibling SOXU checkout found)");
 }
-if (!projectRoot) throw new Error("SOXU_PROJECT_ROOT is required for the standalone agent loop");
-export const ROOT = resolve(projectRoot);
+const picked = pickProjectRoot({ value: process.env.SOXU_PROJECT_ROOT });
+/** "env" when SOXU_PROJECT_ROOT was used, "sibling" for the adjacent SOXU checkout. */
+export const PROJECT_ROOT_SOURCE = picked.source;
+export const ROOT = picked.root;
 const dataDir = process.env.SOXU_DATA_DIR;
 if (dataDir !== undefined && (!dataDir || !isAbsolute(dataDir))) throw new Error("SOXU_DATA_DIR must be a non-empty absolute path");
 export function dataRoot(root = ROOT) {

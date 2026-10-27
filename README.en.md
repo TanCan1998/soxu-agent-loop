@@ -51,3 +51,15 @@ node automation/loop/src/cli.mjs update           # hot update from GitHub (--ch
 ```
 
 `once` and `resume` are gone: `start` recovers and then, when nothing is recoverable, runs the next batch inside one supervised process, so two runners never race the same worktrees. Dashboard buttons are 启动 / 启动循环 / 启动监控; blocked tasks no longer have a per-task recovery button.
+
+## One command to open the dashboard
+
+From the tool repository root, no environment variable required:
+
+```powershell
+pnpm agent:dashboard        # same as: npm run agent:dashboard
+```
+
+Startup prints the resolved target project. Without `SOXU_PROJECT_ROOT` it falls back to the sibling `../SOXU` checkout (marked `(sibling checkout)`); an explicit value always wins; without either it fails instead of guessing.
+
+Other scripts follow `agent:<command>`: `agent:start`, `agent:loop`, `agent:watch`, `agent:status`, `agent:doctor`, `agent:models`, `agent:update`, `agent:cleanup`, `agent:seed-issues`; use `pnpm agent -- <args>` for anything else.
