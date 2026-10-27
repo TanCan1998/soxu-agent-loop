@@ -36,6 +36,25 @@ async function fixture() {
   await git(root, "fetch", "origin", "main");
   return { outer, root, wt, old, state, dir };
 }
+test("stale worktree directories report distinct, actionable reasons", async () => {
+  const outer = await mkdtemp(join(tmpdir(), "soxu-worktree-stale-"));
+  const root = join(outer, "soxu");
+  try {
+    await mkdir(root);
+    const worktrees = join(outer, "soxu-worktrees");
+    const stale = join(worktrees, "github-issue-1-stale");
+    await mkdir(stale, { recursive:true });
+    const dir = join(root, ".soxu", "checkpoints");
+    const base = { local:false, status:"paused", phase:"develop", attempt:0 };
+    await writeCheckpoint({ ...base, issue:{ number:1, title:"[TASK-001] Stale", body:"" },
+      directory:stale, branch:"agent/github-issue-1-stale" }, dir);
+    await writeCheckpoint({ ...base, issue:{ number:2, title:"[TASK-002] Gone", body:"" },
+      directory:join(worktrees, "github-issue-2-gone"), branch:"agent/github-issue-2-gone" }, dir);
+    const rows = await inspectWorktrees({ root });
+    assert.equal(rows.find(x => x.issue === 1)?.reason, "not-a-worktree");
+    assert.equal(rows.find(x => x.issue === 2)?.reason, "worktree-missing");
+  } finally { await rm(outer, { recursive:true, force:true }); }
+});
 test("clean paused worktree syncs with new main and updates base", async () => {
   const f = await fixture();
   try {

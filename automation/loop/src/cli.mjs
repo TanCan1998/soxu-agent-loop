@@ -152,7 +152,9 @@ switch (command) {
     const snapshot = await localProgress(ROOT, id => readCheckpoint(id, undefined, local));
     if (args.includes('--json')) console.log(JSON.stringify(snapshot,null,2));
     else {
-      console.log('SOXU offline task status (not live GitHub or PiDeck data)');
+      // Both modes list the same task files but read different checkpoint namespaces,
+      // so say which one is shown or finished GitHub tasks look unstarted.
+      console.log(`SOXU offline task status in ${local ? 'local-queue' : 'GitHub-issue'} mode (not live GitHub or PiDeck data)`);
       for (const group of ['done','running','paused','blocked','pending']) {
         console.log(`  ${group}: ${snapshot[group].length}`);
         for (const item of snapshot[group]) console.log(`    #${item.id} ${item.title ?? item.name}${item.phase ? ` [${item.phase}]` : ''}${item.updatedAt ? ` (${item.updatedAt})` : ''}`);
