@@ -26,7 +26,28 @@ function killGroup(child) {
   }
 }
 
+export function githubRepository(remote) {
+  const match = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i.exec(remote.trim());
+  if (!match) throw new Error("GitHub operation requires a canonical github.com origin without credentials");
+  return match[1];
+}
 export async function run(bin, args, { cwd, timeoutMs = 90_000, env = process.env, allowFailure = false, signal } = {}) {
+  if (bin === "gh" && args[0] !== "--version") {
+    if (!cwd) throw new Error("GitHub operation requires the target project directory");
+    env = {...env};
+    for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete env[name];
+    if (args.some(arg => arg === "--repo" || arg === "-R" || arg.startsWith("--repo="))) throw new Error("Explicit GitHub repository arguments are not permitted");
+    const fetchUrl = (await run("git", ["remote", "get-url", "origin"], {cwd, env, timeoutMs:10000, signal})).stdout;
+    const pushUrl = (await run("git", ["remote", "get-url", "--push", "origin"], {cwd, env, timeoutMs:10000, signal})).stdout;
+    const repo = githubRepository(fetchUrl);
+    if (githubRepository(pushUrl).toLowerCase() !== repo.toLowerCase()) throw new Error("GitHub origin and push origin do not match");
+    if (env.GH_REPO && env.GH_REPO.replace(/^github\.com\//i, "").toLowerCase() !== repo.toLowerCase()) throw new Error("GH_REPO does not match target project origin");
+    for (const arg of args) {
+      const url = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/(?:pull|issues)\/\d+/i.exec(arg);
+      if (url && url[1].toLowerCase() !== repo.toLowerCase()) throw new Error("GitHub URL does not match target project origin");
+    }
+    env = {...env, GH_HOST:"github.com", GH_REPO:`github.com/${repo}`};
+  }
   const [cmd, argv] = normalize(bin, args);
   return new Promise((resolve, reject) => {
     let stdout = "", stderr = "", finished = false, timedOut = false, interrupted = false;
