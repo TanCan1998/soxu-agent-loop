@@ -27,7 +27,7 @@ Dashboard 仅监听 127.0.0.1，访问令牌由启动时生成。默认继续使
 node automation/loop/src/migrate-data.mjs 'F:\workplace\pi\SOXU' 'F:\workplace\pi\soxu-loop-data' --offline
 $env:SOXU_PROJECT_ROOT = 'F:\workplace\pi\SOXU'
 $env:SOXU_DATA_DIR = 'F:\workplace\pi\soxu-loop-data'
-node automation/loop/src/cli.mjs resume --local --dry-run
+node automation/loop/src/cli.mjs start --local --dry-run
 ```
 
 不设置 `SOXU_DATA_DIR` 时仍使用旧数据；切回旧目录前必须先停止进程并核对状态。任务锁保留在目标项目 `.soxu/locks`，以便新旧程序识别共同任务锁。旧程序不会强制遵守迁移约束，`--offline` 需要操作者确保所有进程已停止。
@@ -64,3 +64,21 @@ Dashboard 提供同样能力：`POST /api/update`，请求体为 `{"action":"che
 - 正在运行的任务不会被重启或中断。Dashboard 崩溃或重启后，会用目标项目的 `.soxu/runner/state.json` 与持久日志重新接管该任务（快照里 `runner.attached = true`），并且仍然可以停止它。
 - 运行器在状态文件里记录 `protocolVersion`。协议不匹配时只展示状态、拒绝控制动作（`409 incompatible-runner`），不做兼容性猜测。
 - “Dashboard 自身”要用新代码仍需重启一次；已在跑的任务继续使用旧代码直到结束。
+
+## 命令面（简化后）
+
+```powershell
+node automation/loop/src/cli.mjs start            # 先恢复 paused/blocked，无可恢复再执行下一批
+node automation/loop/src/cli.mjs start --dry-run  # 只预览会走哪条路径
+node automation/loop/src/cli.mjs loop             # 有界自动循环
+node automation/loop/src/cli.mjs watch            # 持续监控（受策略限制）
+node automation/loop/src/cli.mjs status           # 本地任务状态
+node automation/loop/src/cli.mjs doctor           # 工具链与恢复状态
+node automation/loop/src/cli.mjs models           # 模型路由
+node automation/loop/src/cli.mjs cleanup          # 清理已合并任务分支
+node automation/loop/src/cli.mjs seed-issues      # 发布 backlog 为 Issue
+node automation/loop/src/cli.mjs say -- "继续 SOXU"  # 自然语言恢复
+node automation/loop/src/cli.mjs update           # 从 GitHub 热更新（--check 只比较）
+```
+
+`once` 与 `resume` 已移除：`start` 在同一个受管子进程里先恢复、再按需执行下一批，避免两个 Runner 争抢工作树。页面上的按钮同为「启动」「启动循环」「启动监控」；阻塞任务不再有单独的“恢复此任务”入口，统一由「启动」处理（需先自行确认阻塞原因已解除）。

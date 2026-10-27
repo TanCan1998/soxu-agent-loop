@@ -45,11 +45,10 @@ function element(tag, value, className) {
   return result;
 }
 function disableControls() {
-  for (const button of document.querySelectorAll("[data-command], [data-resume-issue]")) button.disabled = true;
+  for (const button of document.querySelectorAll("[data-command]")) button.disabled = true;
   $("stop").disabled = true;
   $("autoMerge").disabled = true;
-  $("checkUpdate").disabled = true;
-  $("applyUpdate").disabled = true;
+  $("updateTool").disabled = true;
 }
 function lostAuthorization(token) {
   if (token !== tokenInput.value.trim()) return;
@@ -165,13 +164,6 @@ function renderTasks(data) {
     status.dataset.state = task.status;
     card.append(status, element("div", phaseLabels[task.phase] || task.phase || "尚未开始", "task-stage"),
       element("div", task.updatedAt ? new Date(task.updatedAt).toLocaleTimeString() : "—", "task-time"));
-    if (task.status === "blocked") {
-      const button = element("button", "恢复此任务", "task-resume");
-      button.dataset.resumeIssue = String(task.id);
-      button.disabled = Boolean(data.busy);
-      button.addEventListener("click", () => void resumeBlocked(task.id));
-      card.append(button);
-    }
     const taskId = "TASK-" + String(task.id).padStart(3,"0");
     const remote = data.github?.status === "ok" ? data.github.tasks?.[taskId] : null;
     const details = [];
@@ -313,11 +305,13 @@ function render(data) {
     : data.lastRun ? "上次执行 " + data.lastRun.command + " · 退出码 " + (data.lastRun.exitCode ?? "未知") : "未启动调度";
   $("updated").textContent = "更新于 " + new Date(data.generatedAt).toLocaleTimeString();
   for (const button of document.querySelectorAll("[data-command]")) button.disabled = data.busy;
+  // Hot update stays available while a runner is busy: that is the point of it.
+  $("updateTool").disabled = false;
   $("stop").disabled = !data.runner || data.runner.stopping;
   $("autoMerge").disabled = Boolean(data.busy);
   $("autoMerge").dataset.enabled = data.autoMergeEnabled ? "true" : "false";
   $("autoMerge").setAttribute("aria-checked", data.autoMergeEnabled ? "true" : "false");
-  $("autoMerge").textContent = "Agent 自动合并：" + (data.autoMergeEnabled ? "开启" : "关闭");
+  $("autoMerge").textContent = "自动合并：" + (data.autoMergeEnabled ? "开启" : "关闭");
   $("updateStatus").textContent = updateText(data.update, data.protocolVersion);
   $("githubStatus").textContent = data.github?.status === "ok" ? "GitHub PR / CI 状态已更新 · " + new Date(data.github.updatedAt).toLocaleTimeString()
     : data.github?.status === "unavailable" ? "GitHub 状态不可用：请检查 gh 登录和网络；任务与 CI 状态未知" : "GitHub 状态加载中";
@@ -613,19 +607,11 @@ async function mergePr(issue, pr) {
     await refresh();
   } catch (error) { notice("合并失败：" + error.message); }
 }
-async function resumeBlocked(issue) {
-  if (!connected) return notice("先连接本地控制台。");
-  if (!confirm(`恢复任务 #${issue} 前请确认已检查并修复阻塞原因。将重新执行相关门禁，可能调用模型并产生费用。继续？`)) return;
-  try {
-    await api("/api/run", { method:"POST", body:{ command:"resume-blocked", issue } });
-    notice(`已开始恢复任务 #${issue}；可在此查看日志和 Agent 活动。`);
-    await refresh();
-  } catch (error) { notice("恢复失败：" + error.message); }
-}
 async function execute(command) {
   if (!connected) return notice("先连接本地控制台。");
-  if (command === "watch" && !confirm("持续监控可重复执行 Agent 任务并产生模型费用。确认启用受策略限制的 watch？")) return;
-  if (command === "resume" && !confirm("即将恢复全部中断任务，可能产生模型调用。确认？")) return;
+  if (command === "start" && !confirm("启动会先恢复可恢复的暂停/阻塞任务，没有可恢复任务时执行下一批；两者都可能调用模型并产生费用。继续？")) return;
+  if (command === "loop" && !confirm("启动循环会连续执行多轮 Agent 任务并产生模型费用。确认？")) return;
+  if (command === "watch" && !confirm("启动监控可重复执行 Agent 任务并产生模型费用。确认启用受策略限制的监控？")) return;
   try {
     const result = await api("/api/run", { method:"POST", body:{ command } });
     notice("已接受：" + result.command + "。停止仅作用于此控制台启动的任务。");
@@ -648,29 +634,30 @@ function updateText(info, protocolVersion) {
   const version = info.toolVersion ? " · 工具 " + info.toolVersion : "";
   if (info.status === "updated") return "已更新到 " + String(info.current ?? "").slice(0, 8) + " · 重启控制台后生效" + version;
   if (info.status === "rolled-back") return "更新失败，已回滚到 " + String(info.current ?? "").slice(0, 8) + (info.error ? " · " + info.error : "");
+  if (info.dirty) return "工具仓库有本地改动，无法自动更新" + protocol + version;
   if (info.available) return "有更新可用 · behind " + info.behind + protocol + version;
   if (info.status === "ok") return "已是最新" + protocol + version;
   if (info.status === "up-to-date") return "已是最新" + version;
   return (info.status || "未知") + (info.error ? " · " + info.error : "") + protocol;
 }
-async function runUpdate(action) {
-  const buttons = [$("checkUpdate"), $("applyUpdate")];
-  for (const button of buttons) button.disabled = true;
+async function updateFromGithub() {
+  if (!connected) return notice("先连接本地控制台。");
+  $("updateTool").disabled = true;
   try {
-    const result = await api("/api/update", { method: "POST", body: { action } });
+    const check = await api("/api/update", { method: "POST", body: { action: "check" } });
+    $("updateStatus").textContent = updateText(check, check.protocolVersion);
+    if (!check.available) { notice(check.dirty ? "工具仓库有本地改动，无法自动更新" : "已是最新版本"); return; }
+    if (!confirm("从 GitHub 更新工具代码？正在运行的任务不会被中断，冒烟失败会自动回滚。")) return;
+    const result = await api("/api/update", { method: "POST", body: { action: "apply" } });
     $("updateStatus").textContent = updateText(result, result.protocolVersion);
-    notice(action === "apply"
-      ? (result.status === "updated" ? "热更新完成，重启控制台后对新任务生效" : "热更新：" + result.status)
-      : "已检查工具更新");
+    notice(result.status === "updated" ? "热更新完成，重启控制台后对新任务生效" : "热更新：" + result.status);
   } catch (error) {
     notice("热更新失败：" + error.message);
   } finally {
-    for (const button of buttons) button.disabled = false;
+    $("updateTool").disabled = false;
   }
 }
-for (const [id, action] of [["checkUpdate", "check"], ["applyUpdate", "apply"]]) {
-  $(id).addEventListener("click", () => void runUpdate(action));
-}
+$("updateTool").addEventListener("click", () => void updateFromGithub());
 for (const page of pageNames) $("nav"+page).addEventListener("click",()=>showPage(page));
 function renderModelSummary(info) {
   const container=$("modelSummary"); container.replaceChildren();
@@ -815,7 +802,7 @@ for (const button of document.querySelectorAll("[data-command]"))
   button.addEventListener("click", () => void execute(button.dataset.command));
 $("autoMerge").addEventListener("click", async () => {
   const enabled = $("autoMerge").dataset.enabled !== "true";
-  if (enabled && !confirm("开启后，本次控制台后续启动的 Agent 会在仓库分支保护允许时请求自动合并。关闭或重启控制台不会撤销已经提交给 GitHub 的自动合并请求。继续？")) return;
+  if (enabled && !confirm("开启后，本次控制台后续启动的任务会在仓库分支保护允许时请求自动合并。关闭或重启控制台不会撤销已提交给 GitHub 的自动合并请求。继续？")) return;
   try { await api("/api/auto-merge", {method:"POST", body:{enabled}}); await refresh(); }
   catch (error) { notice("设置失败：" + error.message); }
 });

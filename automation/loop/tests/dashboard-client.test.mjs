@@ -44,10 +44,10 @@ function page({ storage = new Map(), handler = () => response(), hidden = false,
   const ids = [
     "milestoneDialog", "milestoneTitle", "milestoneDetails", "closeMilestone", "token", "tokenLabel", "authPanel", "authNotice", "connect", "notice", "connection", "dot", "globalRun", "running", "pending", "done",
     "total", "badge", "runner", "updated", "stop", "tasks", "logs", "refresh", "copyLogs", "intakeRunState", "productReports", "productCopy", "productDelete", "productClear", "qualityReports", "qualityCopy", "qualityDelete", "qualityClear",
-    "navOverview", "navExecution", "navMonitor", "navRequirements", "navLanes", "navModels", "pageOverview", "pageExecution", "pageMonitor", "pageRequirements", "pageLanes", "pageModels", "modelSummary", "openModels", "closeModels", "reloadModels", "saveModels", "modelScope", "modelSearch", "modelInherit", "modelDialog", "modelGroups", "modelMessage", "logLimit", "logFilter", "followLogs", "logCount", "agentCards", "githubStatus", "autoMerge", "updateStatus", "checkUpdate", "applyUpdate", "projectPhaseTitle", "projectPhaseDetail", "projectPhaseCount", "roadmapCards", "developmentLane", "productLane", "qualityLane", "lessonsStatus", "openProduct", "openQuality", "productDialog", "qualityDialog", "closeProduct", "closeQuality", "runProduct", "runQuality", "productRunState", "qualityRunState", "productReport", "qualityReport", "projectProgress", "projectProgressFill", "themeToggle", "openIntake", "intakeDialog", "intakeSummary", "queueList", "closeIntake", "requirement", "assessIntake", "intakeResult", "queueReady", "intakeMilestone", "submitIntake", "clearIntake", "draftList", "batchDrafts", "saveDraft", "saveAnswers",
+    "navOverview", "navExecution", "navMonitor", "navRequirements", "navLanes", "navModels", "pageOverview", "pageExecution", "pageMonitor", "pageRequirements", "pageLanes", "pageModels", "modelSummary", "openModels", "closeModels", "reloadModels", "saveModels", "modelScope", "modelSearch", "modelInherit", "modelDialog", "modelGroups", "modelMessage", "logLimit", "logFilter", "followLogs", "logCount", "agentCards", "githubStatus", "autoMerge", "updateStatus", "updateTool", "projectPhaseTitle", "projectPhaseDetail", "projectPhaseCount", "roadmapCards", "developmentLane", "productLane", "qualityLane", "lessonsStatus", "openProduct", "openQuality", "productDialog", "qualityDialog", "closeProduct", "closeQuality", "runProduct", "runQuality", "productRunState", "qualityRunState", "productReport", "qualityReport", "projectProgress", "projectProgressFill", "themeToggle", "openIntake", "intakeDialog", "intakeSummary", "queueList", "closeIntake", "requirement", "assessIntake", "intakeResult", "queueReady", "intakeMilestone", "submitIntake", "clearIntake", "draftList", "batchDrafts", "saveDraft", "saveAnswers",
   ];
   const elements = Object.fromEntries(ids.map(id => [id, node()]));
-  const actions = ["once", "resume", "loop", "watch"].map(command => {
+  const actions = ["start", "loop", "watch"].map(command => {
     const button = node();
     button.dataset.command = command;
     return button;
@@ -201,17 +201,18 @@ test("log limit defaults to 50 after invalid local preference", async () => {
   assert.equal(view.elements.logLimit.value,"50");
 });
 
-test("blocked task button starts only that task and respects busy state", async () => {
+test("start is the only launch command and blocked cards offer no per-task recovery", async () => {
   const snapshot = {...STATUS, tasks:[{id:1,title:"Supervisor",status:"blocked",phase:"checks"}]};
-  const app = page({handler:(path)=> path === "/api/status" ? {ok:true, status:200, json:async()=>snapshot} : {ok:true,status:202,json:async()=>({command:"resume-blocked"})}});
+  const app = page({handler:(path)=> path === "/api/status" ? {ok:true, status:200, json:async()=>snapshot} : {ok:true,status:202,json:async()=>({command:"start"})}});
   app.elements.token.value=TOKEN; app.elements.connect.dispatch("click"); await tick();
-  const button=app.elements.tasks.children[0].children.find(x=>x.dataset.resumeIssue === "1");
-  assert.ok(button); assert.equal(button.disabled,false);
-  button.dispatch("click"); await tick();
+  // Blocked tasks are handled by "start" together with paused ones.
+  assert.equal(app.elements.tasks.children[0].children.find(x=>x.dataset.resumeIssue !== undefined), undefined);
+  assert.deepEqual(app.actions.map(button=>button.dataset.command), ["start","loop","watch"]);
+  app.actions[0].dispatch("click"); await tick();
   const request=app.requests.find(x=>x.path === "/api/run");
-  assert.deepEqual(JSON.parse(request.options.body),{command:"resume-blocked",issue:1});
+  assert.deepEqual(JSON.parse(request.options.body),{command:"start"});
   snapshot.busy=true; app.elements.refresh.dispatch("click"); await tick();
-  assert.equal(app.elements.tasks.children[0].children.find(x=>x.dataset.resumeIssue === "1").disabled,true);
+  assert.equal(app.actions[0].disabled,true);
 });
 
 test("task cards distinguish local completion, pending CI and dependencies", async () => {
@@ -395,24 +396,25 @@ test("draft review requires a selection or custom answer before submission",asyn
  assert.equal(app.elements.submitIntake.disabled,false);
 });
 
-test("hot update panel reports availability and sends strict update actions", async () => {
+test("one GitHub update button checks first, then applies and reports progress", async () => {
   const snapshot = { ...STATUS, protocolVersion: 1, update: { status: "ok", available: true, behind: 2, toolVersion: "0.1.0" } };
   const app = page({ handler: path => path === "/api/status"
     ? { ok: true, status: 200, json: async () => snapshot }
-    : { ok: true, status: 200, json: async () => ({ status: "updated", previous: "11111111", current: "2222222222", toolVersion: "0.2.0", protocolVersion: 1, restartRequired: true }) } });
+    : { ok: true, status: 200, json: async () => (app.requests.filter(request => request.path === "/api/update").length === 1
+      ? { status: "ok", available: true, behind: 2, protocolVersion: 1 }
+      : { status: "updated", previous: "11111111", current: "2222222222", toolVersion: "0.2.0", protocolVersion: 1, restartRequired: true }) } });
   app.elements.token.value = TOKEN;
   app.elements.connect.dispatch("click");
   await tick();
   assert.match(app.elements.updateStatus.textContent, /有更新可用 · behind 2/);
 
-  app.elements.checkUpdate.dispatch("click");
+  app.elements.updateTool.dispatch("click");
   await tick();
-  app.elements.applyUpdate.dispatch("click");
   await tick();
 
   const actions = app.requests.filter(request => request.path === "/api/update").map(request => JSON.parse(request.options.body).action);
   assert.deepEqual(actions, ["check", "apply"]);
   assert.match(app.elements.updateStatus.textContent, /已更新到 22222222 · 重启控制台后生效/);
-  assert.equal(app.elements.applyUpdate.disabled, false);
+  assert.equal(app.elements.updateTool.disabled, false);
 });
 

@@ -41,7 +41,7 @@ const RUNNER_FIXTURE = [
   'const state = await import(stateUrl);',
   'const root = process.env.SOXU_PROJECT_ROOT;',
   'const logPath = state.runnerLogPath(root, process.pid);',
-  'await state.writeRunnerState({ command: "once", pid: process.pid, logPath }, root);',
+  'await state.writeRunnerState({ command: "start", pid: process.pid, logPath }, root);',
   'appendFileSync(logPath, line + "\\n");',
   'setInterval(() => {}, 1000);',
 ].join("\n");
@@ -78,10 +78,10 @@ async function cleanup(root, coordinator) {
 test("runner state records protocol identity and never adopts a mismatched protocol", async () => {
   const root = await tempRoot("soxu-runner-state-");
   try {
-    await writeRunnerState({ command: "once", pid: process.pid }, root);
+    await writeRunnerState({ command: "start", pid: process.pid }, root);
     const state = await readRunnerState(root);
     assert.equal(state.protocolVersion, PROTOCOL_VERSION);
-    assert.equal(state.command, "once");
+    assert.equal(state.command, "start");
     assert.equal(runnerCompatible(state), true);
     assert.equal((await runnerStatus(root)).state, "running");
 
@@ -111,14 +111,14 @@ test("a restarted dashboard attaches to a live runner, replays its log and can s
     assert.ok(snapshot.log.some(line => line.message.includes("resumed task work")), "log tail must be replayed");
 
     // A second dashboard must not start a competing runner.
-    await assert.rejects(() => first.start("once"), e => e.status === 409);
+    await assert.rejects(() => first.start("start"), e => e.status === 409);
 
     const stop = first.stop();
     assert.equal(stop.accepted, true);
     await waitFor(() => !pidAlive(runner.pid), { label: "runner exit" });
     const after = await first.snapshot();
     assert.equal(after.runner, null);
-    assert.equal(after.lastRun.command, "once");
+    assert.equal(after.lastRun.command, "start");
   } finally {
     killQuietly(runner.pid);
     await cleanup(root, first);

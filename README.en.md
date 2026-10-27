@@ -10,7 +10,7 @@ Data defaults to the target project's `.soxu` directory. To copy supported check
 node automation/loop/src/migrate-data.mjs 'F:\workplace\pi\SOXU' 'F:\workplace\pi\soxu-loop-data' --offline
 $env:SOXU_PROJECT_ROOT = 'F:\workplace\pi\SOXU'
 $env:SOXU_DATA_DIR = 'F:\workplace\pi\soxu-loop-data'
-node automation/loop/src/cli.mjs resume --local --dry-run
+node automation/loop/src/cli.mjs start --local --dry-run
 ```
 
 The target must not exist. The command verifies copies and preserves old data. Locks remain under the target project to be shared with legacy runners. Old runners cannot enforce the migration boundary: do not start them after switching, or state may diverge. To revert, stop processes and reconcile both data directories first. The `--offline` flag requires the operator to ensure all processes are stopped.
@@ -33,3 +33,21 @@ The dashboard exposes the same via `POST /api/update` with `{"action":"check"}` 
 - Running tasks are never restarted. After a dashboard restart it reattaches to a live runner through the target project's `.soxu/runner/state.json` and durable log (`runner.attached = true`) and can still stop it.
 - Runners record `protocolVersion`; a mismatch is reported and its controls are refused (`409 incompatible-runner`) instead of guessed.
 - The dashboard itself needs one restart to use the new code; running tasks finish on the old code.
+
+## Command surface (simplified)
+
+```powershell
+node automation/loop/src/cli.mjs start            # recover paused/blocked first, else run the next batch
+node automation/loop/src/cli.mjs start --dry-run  # preview which path would run
+node automation/loop/src/cli.mjs loop             # bounded autonomous rounds
+node automation/loop/src/cli.mjs watch            # bounded polling monitor
+node automation/loop/src/cli.mjs status           # local task status
+node automation/loop/src/cli.mjs doctor           # toolchain and recovery state
+node automation/loop/src/cli.mjs models           # model routing
+node automation/loop/src/cli.mjs cleanup          # clean merged task branches
+node automation/loop/src/cli.mjs seed-issues      # publish backlog as issues
+node automation/loop/src/cli.mjs say -- "continue SOXU"
+node automation/loop/src/cli.mjs update           # hot update from GitHub (--check compares only)
+```
+
+`once` and `resume` are gone: `start` recovers and then, when nothing is recoverable, runs the next batch inside one supervised process, so two runners never race the same worktrees. Dashboard buttons are 启动 / 启动循环 / 启动监控; blocked tasks no longer have a per-task recovery button.
