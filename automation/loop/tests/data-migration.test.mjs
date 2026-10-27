@@ -18,7 +18,9 @@ test("migration preserves legacy checkpoint and rejects wrong project binding",a
   const run=spawnSync(process.execPath,[migrate,project,target,"--offline"],{encoding:"utf8"});assert.equal(run.status,0,run.stderr);
   assert.equal(await readFile(join(project,".soxu/checkpoints/issue-1.json"),"utf8"),saved);
   const env={...process.env,SOXU_PROJECT_ROOT:project,SOXU_DATA_DIR:target};
-  const status=spawnSync(process.execPath,[cli,"status","--local","--json"],{env,encoding:"utf8"});assert.equal(status.status,0,status.stderr);assert.equal(JSON.parse(status.stdout).paused[0].phase,"checks");
+  const status=spawnSync(process.execPath,[cli,"status","--local","--json"],{env,encoding:"utf8"});
+  if(status.status!==0) console.error("migration diagnostic",JSON.stringify({project,marker:await readFile(join(target,".soxu-project.json"),"utf8")}));
+  assert.equal(status.status,0,status.stderr);assert.equal(JSON.parse(status.stdout).paused[0].phase,"checks");
   const resume=spawnSync(process.execPath,[cli,"resume","--local","--dry-run"],{env,encoding:"utf8"});assert.equal(resume.status,0,resume.stderr);assert.match(resume.stdout,/would resume #1 at checks/);
   const other=join(dir,"other");await mkdir(other);const wrong=spawnSync(process.execPath,[cli,"status"],{env:{...env,SOXU_PROJECT_ROOT:other},encoding:"utf8"});assert.notEqual(wrong.status,0);assert.match(wrong.stderr,/different project/);
   const repeated=spawnSync(process.execPath,[migrate,project,target,"--offline"],{encoding:"utf8"});assert.notEqual(repeated.status,0);

@@ -52,7 +52,7 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
       if(ref.code===0){
         const refHash=await exec("git",["show-ref","--verify","--hash",`refs/heads/${branch}`]);
         if(refHash.stdout.trim()!==sha) localStatus="changed";
-        else if(holders.length>1 || holders.some(x=>resolve(x.path)!==expected || x.locked)) localStatus="other-worktree";
+        else if(holders.length>1 || holders.some(x=>x.locked) || (holders.length && (await realpath(holders[0].path)).toLowerCase()!==(await realpath(expected)).toLowerCase())) localStatus="other-worktree";
         else {
           if(holders.length){
             const st=await lstat(expected), parent=await lstat(managed);
