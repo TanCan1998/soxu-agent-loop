@@ -32,6 +32,10 @@ export function githubRepository(remote) {
   return match[1];
 }
 export async function run(bin, args, { cwd, timeoutMs = 90_000, env = process.env, allowFailure = false, signal } = {}) {
+  if (bin === "git") {
+    env = {...env};
+    for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete env[name];
+  }
   if (bin === "gh" && args[0] !== "--version") {
     if (!cwd) throw new Error("GitHub operation requires the target project directory");
     env = {...env};

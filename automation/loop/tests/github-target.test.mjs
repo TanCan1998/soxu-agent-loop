@@ -14,6 +14,8 @@ test("GitHub commands refuse mismatched repository or push origin before invokin
  const root=await mkdtemp(join(tmpdir(),"soxu-target-"));
  try {
   await run("git",["init"],{cwd:root});await run("git",["remote","add","origin","https://github.com/owner/project.git"],{cwd:root});
+  const origin=await run("git",["remote","get-url","origin"],{cwd:root,env:{...process.env,GIT_DIR:join(root,"missing")}});
+  assert.match(origin.stdout,/owner\/project/);
   await assert.rejects(()=>run("gh",["issue","create"],{cwd:root,env:{...process.env,GH_REPO:"owner/other"}}),/GH_REPO does not match/);
   await assert.rejects(()=>run("gh",["pr","merge","https://github.com/owner/other/pull/1"],{cwd:root,env:{...process.env,GH_REPO:"owner/project"}}),/URL does not match/);
   await run("git",["remote","set-url","--push","origin","https://github.com/owner/other.git"],{cwd:root});
