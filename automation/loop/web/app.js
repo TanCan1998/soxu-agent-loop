@@ -28,9 +28,13 @@ function stored(storage, key) { try { return storage.getItem(key); } catch { ret
 function save(storage, key, value) { try { storage.setItem(key, String(value)); } catch {} }
 function restoreToken() {
   const token = stored(sessionStorage, TOKEN_STORAGE_KEY);
-  if (token && /^[0-9a-f]{48}$/i.test(token)) return token;
+  if (token && validToken(token)) return token;
   if (token) forgetToken(token);
   return "";
+}
+/** Must stay in sync with the server: any 8-128 printable characters, no spaces. */
+function validToken(value) {
+  return typeof value === "string" && /^[\x21-\x7e]{8,128}$/.test(value);
 }
 function forgetToken(token) {
   try {
@@ -64,7 +68,7 @@ function lostAuthorization(token) {
   notice("访问令牌已失效或错误，请粘贴本次启动的新令牌。");
 }
 async function api(path, options = {}, token = tokenInput.value.trim()) {
-  if (!/^[0-9a-f]{48}$/i.test(token)) throw new Error("请填写终端生成的 48 位令牌。");
+  if (!validToken(token)) throw new Error("请填写启动窗口显示的令牌（8–128 位，不含空格）。");
   const response = await fetch(path, {
     method: options.method || "GET",
     headers: { "X-SOXU-Control-Token": token, ...(options.method ? { "Content-Type": "application/json" } : {}) },

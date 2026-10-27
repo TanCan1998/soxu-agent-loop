@@ -149,7 +149,8 @@ test("hidden-page reload restores the token when the page becomes visible", asyn
 });
 
 test("invalid stored data is discarded without connecting", async () => {
-  const storage = new Map([[TOKEN_STORAGE_KEY, "not-a-valid-token"]]);
+  // "not-a-valid-token" is now acceptable (8-128 printable chars); use a truly invalid one.
+  const storage = new Map([[TOKEN_STORAGE_KEY, "short"]]);
   const view = page({ storage });
   await tick();
   assert.equal(storage.has(TOKEN_STORAGE_KEY), false);
@@ -394,6 +395,23 @@ test("draft review requires a selection or custom answer before submission",asyn
  assert.equal(app.elements.submitIntake.disabled,true);
  const field=app.elements.intakeResult.querySelectorAll("fieldset")[0];const custom=field.querySelector("textarea");custom.value="手工输入";field.dispatch("input");
  assert.equal(app.elements.submitIntake.disabled,false);
+});
+
+test("a fixed non-hex token connects and is restored from session storage", async () => {
+  const fixed = "adminsoxuloop";
+  const app = page({ handler: () => ({ ok: true, status: 200, json: async () => ({ ...STATUS }) }) });
+  app.elements.token.value = fixed;
+  app.elements.connect.dispatch("click");
+  await tick();
+  assert.equal(app.elements.authPanel.hidden, true);
+  assert.equal(app.storage.get(TOKEN_STORAGE_KEY), fixed);
+  // Short or spaced tokens are still rejected before any request is made.
+  const bad = page({ handler: () => ({ ok: true, status: 200, json: async () => ({ ...STATUS }) }) });
+  bad.elements.token.value = "short";
+  bad.elements.connect.dispatch("click");
+  await tick();
+  assert.match(bad.elements.authNotice.textContent, /8–128 位/);
+  assert.equal(bad.requests.length, 0);
 });
 
 test("one GitHub update button checks first, then applies and reports progress", async () => {
