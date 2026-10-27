@@ -17,7 +17,31 @@ node automation/loop/src/dashboard-cli.mjs
 
 `status` 默认读取 GitHub 任务命名空间（`github-issue-N.json`），`status --local` 读取本地队列命名空间（`local-issue-N.json`）；两者都只读本地数据、不访问 GitHub，输出首行会标明当前模式。SOXU 这类以 GitHub Issue 驱动的项目应使用不带参数的 `status`。
 
-Dashboard 仅监听 127.0.0.1，访问令牌由启动时生成。默认继续使用目标项目的 `.soxu` 数据目录，与旧检查点兼容。Worktree 仍属于目标项目；迁移不会移动或删除它们。
+Dashboard 默认只监听 `127.0.0.1`，访问令牌由启动时随机生成。默认继续使用目标项目的 `.soxu` 数据目录，与旧检查点兼容。Worktree 仍属于目标项目；迁移不会移动或删除它们。
+
+### 局域网访问与固定令牌（可选，风险自负）
+
+两种方式，优先级：环境变量 > 工具根目录的 `dashboard.config.json`（已在 `.gitignore` 中忽略）> 默认值。
+
+```powershell
+# 方式一：环境变量
+$env:SOXU_DASHBOARD_HOST = '0.0.0.0'            # 默认 127.0.0.1
+$env:SOXU_DASHBOARD_TOKEN = '<至少 8 位、不含空格的字符串>'
+$env:SOXU_DASHBOARD_PORT = '47321'              # 可选
+pnpm agent:dashboard
+
+# 方式二：dashboard.config.json
+{ "host": "0.0.0.0", "port": 47321, "token": "<同上>" }
+```
+
+绑定非回环地址时，启动日志会列出可访问的局域网地址并打印安全警告。
+
+**安全边界（务必读完）**：
+
+- 这个控制台能启动/停止 Agent、合并 PR、读写模型设置、查看日志。**任何能连到这个端口且知道令牌的人，都拥有同等权限**。
+- 令牌最短 8 位、可任意可打印字符；短令牌可被爆破。**建议 32 位以上随机串**，只在可信网络使用。
+- 仍保留 Host/Origin 白名单（防 DNS rebinding）：只有本机网卡地址与回环地址可作为 Host；跨站 Origin 一律 403。
+- 不要通过公网端口映射暴露它；需要远程访问请走 SSH 隧道。
 
 ## 迁移运行数据
 

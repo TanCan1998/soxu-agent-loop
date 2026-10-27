@@ -63,3 +63,17 @@ pnpm agent:dashboard        # same as: npm run agent:dashboard
 Startup prints the resolved target project. Without `SOXU_PROJECT_ROOT` it falls back to the sibling `../SOXU` checkout (marked `(sibling checkout)`); an explicit value always wins; without either it fails instead of guessing.
 
 Other scripts follow `agent:<command>`: `agent:start`, `agent:loop`, `agent:watch`, `agent:status`, `agent:doctor`, `agent:models`, `agent:update`, `agent:cleanup`, `agent:seed-issues`; use `pnpm agent -- <args>` for anything else.
+
+### LAN access and a fixed token (optional, at your own risk)
+
+Priority: environment variables > `dashboard.config.json` in the tool root (gitignored) > defaults.
+
+```powershell
+$env:SOXU_DASHBOARD_HOST = '0.0.0.0'      # default 127.0.0.1
+$env:SOXU_DASHBOARD_TOKEN = '<8+ printable chars, no spaces>'
+pnpm agent:dashboard
+```
+
+Non-loopback binding prints the reachable LAN URLs plus a warning. The Host/Origin allowlist stays in place (DNS rebinding is still rejected).
+
+**Security**: this console can start/stop agents, merge PRs, change model settings and read logs. Anyone who reaches the port with the token has the same power. Use a long random token on a trusted network; never expose it through a public port mapping — use an SSH tunnel instead.

@@ -5,8 +5,8 @@ import { PassThrough } from "node:stream";
 import { request } from "node:http";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { DashboardCoordinator, createDashboardServer } from "../src/dashboard.mjs";
+import { networkInterfaces, tmpdir } from "node:os";
+import { DashboardCoordinator, createDashboardServer, allowedHosts } from "../src/dashboard.mjs";
 import { writeCheckpoint } from "../src/checkpoint.mjs";
 
 const TOKEN = "a".repeat(48);
@@ -236,3 +236,59 @@ test("report deletion enforces authentication, origin and lane-scoped filenames"
     assert.equal((await call(port,{path:"/api/advisory-reports?lane=product"})).body.reports.length,0);
   }finally{await new Promise(resolve=>server.close(resolve));await cleanup(root,coordinator);}
 });
+
+test("a fixed dashboard token is supported while malformed tokens stay rejected", async () => {
+  const root = await fixture();
+  const coordinator = new DashboardCoordinator({ root, githubStatus });
+  try {
+    for (const token of ["short", "has space here", "", "x".repeat(200)]) {
+      assert.throws(() => createDashboardServer({ root, token, coordinator }), /Invalid dashboard token/);
+    }
+    const fixed = "adminsoxuloop";
+    const { server, stopStreams } = createDashboardServer({ root, token: fixed, coordinator });
+    await new Promise(ok => server.listen(0, "127.0.0.1", ok));
+    const port = server.address().port;
+    try {
+      assert.equal((await call(port, { token: fixed })).status, 200);
+      assert.equal((await call(port, { token: "wrongtoken" })).status, 401);
+      assert.equal((await call(port, { token: "a".repeat(48) })).status, 401);
+      // POST still requires a same-origin Origin header.
+      const origin = "http://127.0.0.1:" + port;
+      assert.equal((await call(port, { path: "/api/run", method: "POST", token: fixed, body: { command: "start" } })).status, 403);
+      assert.equal((await call(port, { path: "/api/run", method: "POST", token: fixed, origin, body: { command: "start" } })).status, 202);
+    } finally {
+      stopStreams();
+      await new Promise(ok => server.close(ok));
+    }
+  } finally { await cleanup(root, coordinator); }
+});
+
+test("LAN binding accepts local interface hosts and still rejects foreign hosts and origins", async () => {
+  const ipv4 = Object.values(networkInterfaces()).flat()
+    .filter(nic => nic && !nic.internal && nic.family === "IPv4").map(nic => nic.address);
+  const root = await fixture();
+  const coordinator = new DashboardCoordinator({ root, githubStatus });
+  const { server, stopStreams } = createDashboardServer({ root, token: "lani-loop-token", bindHost: "0.0.0.0", coordinator });
+  try {
+    // Loopback-only configuration must not allowlist LAN addresses.
+    const loopback = allowedHosts("127.0.0.1", 47321);
+    assert.ok(loopback.has("127.0.0.1:47321"));
+    for (const address of ipv4) assert.ok(!loopback.has(address + ":47321"), "loopback binding must not allow " + address);
+
+    await new Promise(ok => server.listen(0, "0.0.0.0", ok));
+    const port = server.address().port;
+    if (!ipv4.length) { t.skip("no non-internal IPv4 interface"); return; }
+    const lanHost = ipv4[0] + ":" + port;
+    assert.ok(allowedHosts("0.0.0.0", port).has(lanHost));
+    assert.equal((await call(port, { host: lanHost, token: "lani-loop-token" })).status, 200);
+    assert.equal((await call(port, { host: "evil.example:" + port, token: "lani-loop-token" })).status, 403);
+    assert.equal((await call(port, { host: lanHost, origin: "http://evil.example", token: "lani-loop-token", path: "/api/run", method: "POST", body: { command: "start" } })).status, 403);
+    const lanOrigin = "http://" + lanHost;
+    assert.equal((await call(port, { host: lanHost, origin: lanOrigin, token: "lani-loop-token", path: "/api/run", method: "POST", body: { command: "start" } })).status, 202);
+  } finally {
+    stopStreams();
+    await new Promise(ok => server.close(ok));
+    await cleanup(root, coordinator);
+  }
+});
+

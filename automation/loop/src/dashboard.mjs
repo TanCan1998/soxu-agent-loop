@@ -1,7 +1,8 @@
 import { dataRoot } from "./config.mjs";
 import { createServer } from "node:http";
 import { fork } from "node:child_process";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { networkInterfaces } from "node:os";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
@@ -42,10 +43,37 @@ const ASSETS = new Map([
 ]);
 
 export function dashboardToken() { return randomBytes(24).toString("hex"); }
+/** A supplied token may be any printable string; the generated default stays 48 hex chars. */
+export function isValidToken(value) {
+  return typeof value === "string" && /^[\x21-\x7e]{8,128}$/.test(value);
+}
 function tokenMatches(header, expected) {
-  if (typeof header !== "string" || !/^[0-9a-f]{48}$/i.test(header)) return false;
-  const a = Buffer.from(header, "hex"), b = Buffer.from(expected, "hex");
-  return a.length === b.length && timingSafeEqual(a, b);
+  if (typeof header !== "string" || !isValidToken(header)) return false;
+  // Hash both sides so a shorter fixed token still compares in constant time.
+  const a = createHash("sha256").update(header, "utf8").digest();
+  const b = createHash("sha256").update(expected, "utf8").digest();
+  return timingSafeEqual(a, b);
+}
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+export function isLoopbackHost(host) {
+  return typeof host === "string" && (LOOPBACK_HOSTS.has(host) || host === "::ffff:127.0.0.1");
+}
+/**
+ * Hosts/origins this process answers to. The list is an allowlist so an attacker
+ * domain that resolves to this machine (DNS rebinding) is still rejected.
+ */
+export function allowedHosts(bindHost, port, interfaces = networkInterfaces()) {
+  const hosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]);
+  if (isLoopbackHost(bindHost)) return hosts;
+  if (bindHost !== "0.0.0.0" && bindHost !== "::") hosts.add(`${bindHost}:${port}`);
+  for (const list of Object.values(interfaces ?? {})) {
+    for (const nic of list ?? []) {
+      if (nic.internal) continue;
+      if (nic.family === "IPv4") hosts.add(`${nic.address}:${port}`);
+      else if (nic.family === "IPv6") hosts.add(`[${nic.address}]:${port}`);
+    }
+  }
+  return hosts;
 }
 function cleanLine(value) {
   return String(value).replace(/\u001b\[[0-9;]*m/g, "")
@@ -462,8 +490,8 @@ async function readBody(request) {
   catch { throw Object.assign(new Error("invalid-json"), { status: 400 }); }
 }
 
-export function createDashboardServer({ root = ROOT, token, coordinator = new DashboardCoordinator({ root }) } = {}) {
-  if (typeof token !== "string" || !/^[0-9a-f]{48}$/i.test(token)) throw new Error("Invalid dashboard token");
+export function createDashboardServer({ root = ROOT, token, bindHost = "127.0.0.1", coordinator = new DashboardCoordinator({ root }) } = {}) {
+  if (!isValidToken(token)) throw new Error("Invalid dashboard token: 8-128 printable characters without spaces");
   const streamClients = new Set();
   let heartbeat = null, catalogPromise = null;
   const release = response => {
@@ -499,7 +527,9 @@ export function createDashboardServer({ root = ROOT, token, coordinator = new Da
   };
   const server = createServer({ maxHeaderSize: 8192 }, async (request, response) => {
     const port = server.address()?.port;
-    const origin = `http://127.0.0.1:${port}`;
+    const hosts = allowedHosts(bindHost, port);
+    // Host is allowlisted above, so it always carries the port.
+    const base = `http://${request.headers.host}`;
     const reply = (status, body) => {
       response.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
       response.end(JSON.stringify(body));
@@ -510,10 +540,18 @@ export function createDashboardServer({ root = ROOT, token, coordinator = new Da
     response.setHeader("Referrer-Policy", "no-referrer");
     response.setHeader("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
     const peer = request.socket.remoteAddress;
-    if (request.headers.host !== `127.0.0.1:${port}` || (peer !== "127.0.0.1" && peer !== "::ffff:127.0.0.1")) {
+    const peerIsLoopback = peer === "127.0.0.1" || peer === "::1" || peer === "::ffff:127.0.0.1";
+    // Loopback binding stays loopback-only; a LAN binding accepts LAN peers but still
+    // requires an allowlisted Host header, so DNS rebinding cannot reach the API.
+    if (!hosts.has(request.headers.host ?? "") || (isLoopbackHost(bindHost) && !peerIsLoopback)) {
       return reply(403, { error: "invalid-host" });
     }
-    if (request.headers.origin && request.headers.origin !== origin) return reply(403, { error: "invalid-origin" });
+    const originAllowed = value => {
+      if (typeof value !== "string") return false;
+      const match = /^http:\/\/([^/]+)$/.exec(value);
+      return Boolean(match) && hosts.has(match[1]);
+    };
+    if (request.headers.origin && !originAllowed(request.headers.origin)) return reply(403, { error: "invalid-origin" });
     if (request.method === "GET" && request.url === "/favicon.ico") {
       response.writeHead(204);
       return response.end();
@@ -555,7 +593,7 @@ export function createDashboardServer({ root = ROOT, token, coordinator = new Da
       catch { return reply(503, {error:"report-unavailable"}); }
     }
     if (request.method === "GET" && request.url.startsWith("/api/advisory-reports?")) {
-      try { const query=new URL(request.url,origin).searchParams, lane=query.get("lane"), name=query.get("name");
+      try { const query=new URL(request.url,base).searchParams, lane=query.get("lane"), name=query.get("name");
         if ([...query.keys()].some(k=>!['lane','name'].includes(k)) || query.getAll('lane').length!==1 || query.getAll('name').length>1) return reply(400,{error:"invalid-query"});
         return reply(200,name === null ? {reports:await listReports(root,lane)} : {report:await readReport(root,lane,name)});
       } catch(error) {return reply(error.status ?? 503,{error:error.status ? error.message : "report-unavailable"});}
@@ -571,7 +609,7 @@ export function createDashboardServer({ root = ROOT, token, coordinator = new Da
       catch { return reply(503, { error: "status-unavailable" }); }
     }
     if (request.method === "POST" && ["/api/run", "/api/stop", "/api/merge", "/api/auto-merge", "/api/update", "/api/intake-assess", "/api/intake-submit", "/api/intake-clear", "/api/drafts-save", "/api/drafts-move", "/api/drafts-remove", "/api/drafts-assess", "/api/drafts-answer", "/api/drafts-batch", "/api/drafts-resolve", "/api/advisory-run", "/api/advisory-delete", "/api/model-settings"].includes(request.url)) {
-      if (request.headers.origin !== origin || request.headers["content-type"] !== "application/json") {
+      if (!request.headers.origin || !originAllowed(request.headers.origin) || request.headers["content-type"] !== "application/json") {
         return reply(403, { error: "invalid-request-origin" });
       }
       try {
