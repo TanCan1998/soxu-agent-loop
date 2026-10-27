@@ -11,9 +11,11 @@ SOXU 的开发调度器与本地监控 Dashboard。SOXU 桌面产品由 [SOXU](h
 ```powershell
 $env:SOXU_PROJECT_ROOT = 'F:\workplace\pi\SOXU'
 node automation/loop/src/cli.mjs doctor
-node automation/loop/src/cli.mjs status --local
+node automation/loop/src/cli.mjs status
 node automation/loop/src/dashboard-cli.mjs
 ```
+
+`status` 默认读取 GitHub 任务命名空间（`github-issue-N.json`），`status --local` 读取本地队列命名空间（`local-issue-N.json`）；两者都只读本地数据、不访问 GitHub，输出首行会标明当前模式。SOXU 这类以 GitHub Issue 驱动的项目应使用不带参数的 `status`。
 
 Dashboard 仅监听 127.0.0.1，访问令牌由启动时生成。默认继续使用目标项目的 `.soxu` 数据目录，与旧检查点兼容。Worktree 仍属于目标项目；迁移不会移动或删除它们。
 

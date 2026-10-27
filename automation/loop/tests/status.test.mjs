@@ -30,6 +30,40 @@ test('local progress separates done, running, paused and unstarted tasks', async
 });
 
 
+test('status names the checkpoint mode instead of mixing namespaces', async () => {
+  const project = await mkdtemp(join(tmpdir(), 'soxu-status-local-'));
+  const script = join(TOOL_ROOT, 'automation/loop/src/cli.mjs');
+  try {
+    await mkdir(join(project, 'tasks/backlog'), {recursive:true});
+    await mkdir(join(project, 'automation'), {recursive:true});
+    await mkdir(join(project, '.soxu/checkpoints'), {recursive:true});
+    // The CLI validates project policy at startup; reuse the target project's own file.
+    await writeFile(join(project, 'automation/policy.json'), await readFile(join(ROOT, 'automation/policy.json')));
+    await writeFile(join(project, 'tasks/backlog/TASK-001.md'), '# Finished task');
+    await writeFile(join(project, 'tasks/backlog/TASK-002.md'), '# Untouched task');
+    await writeFile(join(project, '.soxu/checkpoints/github-issue-1.json'), JSON.stringify({
+      schemaVersion: 2, local: false, status: 'done', phase: 'done',
+      issue: {number: 1, title: '[TASK-001] Finished task'}
+    }));
+    await writeFile(join(project, '.soxu/checkpoints/local-issue-2.json'), JSON.stringify({
+      schemaVersion: 2, local: true, status: 'paused', phase: 'checks',
+      issue: {number: 2, title: '[TASK-002] Untouched task'}
+    }));
+    const env = {...process.env, SOXU_PROJECT_ROOT: project};
+    delete env.SOXU_DATA_DIR;
+    const {stdout} = await execFileAsync(process.execPath, [script, 'status', '--local', '--json'], {cwd:project, env, timeout:10000});
+    const snapshot = JSON.parse(stdout);
+    // Local-queue mode must not borrow GitHub-mode progress.
+    assert.deepEqual(snapshot.done.map(x => x.id), []);
+    assert.deepEqual(snapshot.paused.map(x => x.id), [2]);
+    const {stdout: human} = await execFileAsync(process.execPath, [script, 'status', '--local'], {cwd:project, env, timeout:10000});
+    assert.match(human, /local-queue mode/);
+    const {stdout: github} = await execFileAsync(process.execPath, [script, 'status'], {cwd:project, env, timeout:10000});
+    assert.match(github, /GitHub-issue mode/);
+    assert.match(github, /#1 Finished task/);
+  } finally { await rm(project, {recursive:true, force:true}); }
+});
+
 test('missing H1 uses TASK id instead of blank title', async () => {
   const root = await mkdtemp(join(tmpdir(), 'soxu-status-fallback-'));
   try {

@@ -2,7 +2,7 @@
 
 Development orchestration and a local monitoring dashboard for [SOXU](https://github.com/TanCan1998/SOXU). This migration preview has not passed a complete release validation. It requires Node.js 24+, Git, GitHub CLI, Pi, and the target project's own toolchain and model authentication.
 
-Set `SOXU_PROJECT_ROOT` to the absolute project path before running `node automation/loop/src/cli.mjs doctor`, `node automation/loop/src/cli.mjs status --local`, or `node automation/loop/src/dashboard-cli.mjs`. Git and GitHub operations use the target project. The dashboard listens on localhost and creates a session token. Worktrees remain owned by the target repository.
+Set `SOXU_PROJECT_ROOT` to the absolute project path before running `node automation/loop/src/cli.mjs doctor`, `node automation/loop/src/cli.mjs status`, or `node automation/loop/src/dashboard-cli.mjs`. Git and GitHub operations use the target project. The dashboard listens on localhost and creates a session token. Worktrees remain owned by the target repository.
 
 Data defaults to the target project's `.soxu` directory. To copy supported checkpoints, reports, drafts and model settings to a new directory, stop **all** old and new dashboards, runners and agents first, inspect existing locks, and run:
 
