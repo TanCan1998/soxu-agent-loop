@@ -14,6 +14,7 @@ import { duplicatePrs, similarPrs } from "./duplicate-pr.mjs";
 
 const WORKTREES = resolve(ROOT, "../soxu-worktrees");
 const LOCKS = resolve(ROOT, ".soxu", "locks");
+const samePath = (a,b) => process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 
 function reportTaskPhase(taskId, phase, status = "running") {
   if (typeof process.send === "function" && process.connected) {
@@ -55,7 +56,7 @@ async function worktreeFor(issue, local, state) {
     if (!state.branch?.startsWith(`agent/${local ? "local" : "github"}-issue-${issue.number}-`) && !state.branch?.startsWith(`agent/issue-${issue.number}-`)) throw new Error("Saved branch mismatch");
     const root = await git(["rev-parse", "--show-toplevel"], state.directory);
     const branch = await git(["branch", "--show-current"], state.directory);
-    if ((await realpath(root)).toLowerCase() !== (await realpath(state.directory)).toLowerCase() || branch !== state.branch) throw new Error("Saved Worktree identity mismatch; manual inspection required");
+    if (!samePath(await realpath(root),await realpath(state.directory)) || branch !== state.branch) throw new Error("Saved Worktree identity mismatch; manual inspection required");
     return { branch, directory: state.directory };
   }
   await mkdir(WORKTREES, { recursive: true });

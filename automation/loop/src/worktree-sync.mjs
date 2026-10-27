@@ -10,6 +10,7 @@ import { writeCheckpoint } from "./checkpoint.mjs";
 const EARLY = new Set(["worktree", "install", "develop"]);
 const RECHECK = new Set(["checks", "review", "finalChecks", "recoveryInstall"]);
 const NAME = /^(local|github)-issue-([1-9]\d*)\.json$/;
+const samePath = (a,b) => process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 
 async function loadStates(root) {
   const dir = join(dataRoot(root), "checkpoints");
@@ -65,7 +66,7 @@ async function inspect(root, state) {
     const branch = await git(["branch", "--show-current"], state.directory);
     const prefix = "agent/" + (state.local ? "local" : "github") + "-issue-" + state.issue.number + "-";
     const legacy = "agent/issue-" + state.issue.number + "-";
-    if ((await realpath(top)).toLowerCase() !== wtReal.toLowerCase() ||
+    if (!samePath(await realpath(top),wtReal) ||
         branch !== state.branch || !(branch.startsWith(prefix) || branch.startsWith(legacy))) {
       info.reason = "worktree-identity-mismatch"; return info;
     }

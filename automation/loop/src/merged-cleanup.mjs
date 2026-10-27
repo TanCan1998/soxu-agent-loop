@@ -3,6 +3,7 @@ import { open, readFile, readdir, rm, lstat, realpath, mkdir } from "node:fs/pro
 import { join, resolve, relative } from "node:path";
 import { run } from "./process.mjs";
 import { readCheckpoint, writeCheckpoint } from "./checkpoint.mjs";
+const samePath = (a,b) => process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 
 // Cleanup is restricted to Runner-owned GitHub tasks with an exact merged PR head.
 export async function cleanupMergedTasks(root, { execute=run, log=console.log, signal }={}) {
@@ -52,7 +53,7 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
       if(ref.code===0){
         const refHash=await exec("git",["show-ref","--verify","--hash",`refs/heads/${branch}`]);
         if(refHash.stdout.trim()!==sha) localStatus="changed";
-        else if(holders.length>1 || holders.some(x=>x.locked) || (holders.length && (await realpath(holders[0].path)).toLowerCase()!==(await realpath(expected)).toLowerCase())) localStatus="other-worktree";
+        else if(holders.length>1 || holders.some(x=>x.locked) || (holders.length && !samePath(await realpath(holders[0].path),await realpath(expected)))) localStatus="other-worktree";
         else {
           if(holders.length){
             const st=await lstat(expected), parent=await lstat(managed);
