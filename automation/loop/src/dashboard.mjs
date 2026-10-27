@@ -19,6 +19,13 @@ import { DraftStore } from "./dashboard-drafts.mjs";
 import { mergeTaskPr } from "./dashboard-merge.mjs";
 import { readGithubStatus } from "./dashboard-github.mjs";
 import { isModelIdentifier } from "./model-identifiers.mjs";
+import { stat, open } from "node:fs/promises";
+import { spawn as spawnProcess } from "node:child_process";
+import {
+  PROTOCOL_VERSION, pidAlive, readRunnerState, readRunnerExit, clearRunnerState,
+  runnerCompatible, writeRunnerState, runnerLogPath,
+} from "./runner-state.mjs";
+import { checkUpdate, applyUpdate as applyToolUpdate } from "./update.mjs";
 
 export const DASHBOARD_PORT = 47321;
 const COMMANDS = new Set(["once", "resume", "loop", "watch"]);
@@ -88,6 +95,131 @@ export class DashboardCoordinator extends EventEmitter {
     this.githubPending = null;
     this.lanes = null; this.lanesNext = 0; this.lanesPending = null;
     this.cleanupNext=0;this.cleanupPending=null;this.cleanupController=new AbortController();
+    // A runner started by a previous dashboard survives a hot update; adopt it instead
+    // of pretending the project is idle or spawning a second runner.
+    this.attached = null;
+    this.attachedOffset = 0;
+    this.attachedTimer = null;
+    this.updateInfo = null;
+    this.updateCheckedAt = 0;
+    this.stopped = false;
+  }
+
+  /** Read new bytes from the detached runner's durable log. */
+  async catchUpRunnerLog() {
+    const job = this.attached;
+    if (!job?.logPath) return;
+    try {
+      const size = (await stat(job.logPath)).size;
+      if (size <= this.attachedOffset) return;
+      const start = Math.max(this.attachedOffset, size - 200_000);
+      const handle = await open(job.logPath, "r");
+      let text;
+      try {
+        const buffer = Buffer.alloc(size - start);
+        await handle.read(buffer, 0, buffer.length, start);
+        text = buffer.toString("utf8");
+      } finally { await handle.close(); }
+      this.attachedOffset = size;
+      for (const line of text.split(/\r?\n/)) if (line.trim()) this.push(line, "runner");
+    } catch { /* A missing log only means no new output. */ }
+  }
+
+  /** Adopt a runner left behind by a previous dashboard process. */
+  async syncRunner() {
+    if (this.active) return null;
+    if (this.attached) {
+      if (pidAlive(this.attached.pid)) { await this.catchUpRunnerLog(); return this.attached; }
+      await this.finishAttached();
+      return null;
+    }
+    const state = await readRunnerState(this.root);
+    if (!state || state.invalid || !pidAlive(state.pid)) return null;
+    this.attached = {
+      command: state.command,
+      pid: state.pid,
+      startedAt: state.startedAt,
+      logPath: state.logPath ?? runnerLogPath(this.root, state.pid),
+      protocolVersion: state.protocolVersion,
+      toolVersion: state.toolVersion,
+      compatible: runnerCompatible(state),
+      stopping: false,
+    };
+    this.attachedOffset = 0;
+    this.push(`Attached to running ${state.command} (pid ${state.pid})${this.attached.compatible ? "" : "; protocol mismatch, control disabled"}`);
+    await this.catchUpRunnerLog();
+    this.attachedTimer ??= setInterval(() => { this.catchUpRunnerLog().catch(() => {}); }, 1000);
+    this.attachedTimer.unref?.();
+    this.emit("dashboard:event", { type: "status", data: {} });
+    return this.attached;
+  }
+
+  async finishAttached(reason) {
+    const job = this.attached;
+    if (!job) return;
+    if (this.attachedTimer) { clearInterval(this.attachedTimer); this.attachedTimer = null; }
+    await this.catchUpRunnerLog();
+    const exit = await readRunnerExit(this.root).catch(() => null);
+    this.attached = null;
+    await clearRunnerState(job.pid, this.root).catch(() => {});
+    this.lastRun = {
+      command: job.command,
+      finishedAt: exit?.finishedAt ?? new Date().toISOString(),
+      exitCode: Number.isInteger(exit?.exitCode) ? exit.exitCode : null,
+      signal: exit?.signal ?? null,
+      attached: true,
+      reason: reason ?? null,
+    };
+    this.push(`Runner ${job.command} (pid ${job.pid}) finished${this.lastRun.exitCode === null ? "" : `; exit=${this.lastRun.exitCode}`}`);
+    this.emit("dashboard:event", { type: "status", data: {} });
+  }
+
+  /** Stop a runner that this dashboard did not spawn (no IPC channel exists). */
+  stopAttached() {
+    const job = this.attached;
+    if (!job) throw Object.assign(new Error("no-dashboard-job"), { status: 409 });
+    if (!job.compatible) throw Object.assign(new Error("incompatible-runner"), { status: 409 });
+    if (job.stopping) return { accepted: true, stopping: true };
+    job.stopping = true;
+    try {
+      if (process.platform === "win32") spawnProcess("taskkill", ["/PID", String(job.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" }).unref();
+      else { try { process.kill(-job.pid, "SIGTERM"); } catch { process.kill(job.pid, "SIGTERM"); } }
+    } catch (e) {
+      job.stopping = false;
+      throw Object.assign(new Error("stop-failed"), { status: 409, cause: e });
+    }
+    this.push(`Stop requested for attached ${job.command} (pid ${job.pid})`);
+    this.emit("dashboard:event", { type: "status", data: {} });
+    return { accepted: true, stopping: true };
+  }
+
+  /** Read-only hot-update check, cached briefly to keep status polling cheap. */
+  async refreshUpdate({ force = false } = {}) {
+    if (!force && this.updateInfo && Date.now() - this.updateCheckedAt < 60_000) return this.updateInfo;
+    try { this.updateInfo = await checkUpdate({ toolRoot: TOOL_ROOT }); }
+    catch (e) { this.updateInfo = { status: "error", error: String(e?.message ?? e).slice(0, 300) }; }
+    this.updateCheckedAt = Date.now();
+    this.emit("dashboard:event", { type: "status", data: {} });
+    return this.updateInfo;
+  }
+
+  /**
+   * Apply a hot update while tasks keep running: already-loaded modules stay in the
+   * live runner, the checkout moves forward, and a failed smoke gate rolls back.
+   */
+  async applyUpdate() {
+    if (this.reserved) throw Object.assign(new Error("runner-busy"), { status: 409 });
+    this.reserved = true;
+    try {
+      const result = await applyToolUpdate({ toolRoot: TOOL_ROOT });
+      this.updateInfo = { ...result, toolRoot: TOOL_ROOT, protocolVersion: PROTOCOL_VERSION, checkedAt: new Date().toISOString() };
+      this.updateCheckedAt = Date.now();
+      this.push(`Hot update: ${result.status}${result.error ? ` (${result.error})` : ""}`, result.status === "updated" ? "system" : "system");
+      return result;
+    } finally {
+      this.reserved = false;
+      this.emit("dashboard:event", { type: "status", data: {} });
+    }
   }
   push(message, stream = "system") {
     const line = { seq: ++this.serial, time: new Date().toISOString(), stream, message: cleanLine(message) };
@@ -144,6 +276,7 @@ export class DashboardCoordinator extends EventEmitter {
     this.refreshCleanup();
     this.refreshGithub();
     this.refreshLanes();
+    const attached = await this.syncRunner().catch(() => null);
     await this.intake.initialized;
     await this.drafts.initialized;
     const [progress, externalLocks, modelInfo] = await Promise.all([
@@ -181,10 +314,16 @@ export class DashboardCoordinator extends EventEmitter {
         id: item.id, title: cleanLine(item.title ?? item.name).slice(0, 160),
         status, phase: item.phase, updatedAt: item.updatedAt,
       }))),
-      runner: this.active ? { command: this.active.command, startedAt: this.active.startedAt, stopping: this.active.stopping } : null,
+      protocolVersion: PROTOCOL_VERSION,
+      runner: this.active
+        ? { command: this.active.command, startedAt: this.active.startedAt, stopping: this.active.stopping, pid: this.active.child?.pid ?? null, attached: false, compatible: true, protocolVersion: PROTOCOL_VERSION }
+        : attached
+          ? { command: attached.command, startedAt: attached.startedAt, pid: attached.pid, stopping: attached.stopping, attached: true, compatible: attached.compatible, protocolVersion: attached.protocolVersion, toolVersion: attached.toolVersion }
+          : null,
+      update: this.updateInfo,
       lastRun: this.lastRun,
       externalLocks,
-      busy: this.reserved || this.active !== null || externalLocks > 0,
+      busy: this.reserved || this.active !== null || attached !== null || externalLocks > 0,
       log: this.lines.slice(-MAX_LOGS),
       note: "Task phase is a checkpoint, not proof of a live Pi process; controls affect only dashboard-launched jobs.",
     };
@@ -192,6 +331,8 @@ export class DashboardCoordinator extends EventEmitter {
   async start(command, issue = null) {
     if (!COMMANDS.has(command) && command !== "resume-blocked") throw Object.assign(new Error("unsupported-command"), { status: 400 });
     if (this.reserved || this.active) throw Object.assign(new Error("runner-busy"), { status: 409 });
+    // A runner left by a previous dashboard still owns the worktrees.
+    if (await this.syncRunner()) throw Object.assign(new Error("runner-busy"), { status: 409 });
     this.reserved = true; // reserve before awaiting disk I/O to reject simultaneous requests
     try {
       if (await liveExternalLocks(this.root)) throw Object.assign(new Error("external-runner-active"), { status: 409 });
@@ -204,12 +345,23 @@ export class DashboardCoordinator extends EventEmitter {
         args = ["resume", "--blocked", "--issue", String(issue)];
       }
       const script = join(TOOL_ROOT, "automation", "loop", "src", "cli.mjs");
+      // Detached so that restarting the dashboard (hot update) cannot kill a run.
       const child = this.spawn(script, args, {
         cwd: this.root,
         stdio: ["ignore", "pipe", "pipe", "ipc"],
         windowsHide: true,
-        env: {...process.env, SOXU_PROJECT_ROOT: this.root, SOXU_DASHBOARD_AUTO_MERGE: this.autoMergeEnabled ? "1" : "0"},
+        detached: process.platform !== "win32",
+        env: {
+          ...process.env,
+          SOXU_PROJECT_ROOT: this.root,
+          SOXU_DASHBOARD_AUTO_MERGE: this.autoMergeEnabled ? "1" : "0",
+          SOXU_RUNNER_STATE: "1",
+        },
       });
+      // Record the runner before it self-registers, so an immediate restart still finds it.
+      if (child.pid) {
+        await writeRunnerState({ command: args.join(" "), pid: child.pid, logPath: runnerLogPath(this.root, child.pid) }, this.root).catch(() => {});
+      }
       const job = { child, command, startedAt: new Date().toISOString(), stopping: false };
       this.active = job;
       this.agents.clear();
@@ -279,6 +431,7 @@ export class DashboardCoordinator extends EventEmitter {
     } finally { this.reserved = false; this.emit("dashboard:event", {type:"status",data:{}}); }
   }
   stop() {
+    if (!this.active && this.attached) return this.stopAttached();
     const job = this.active;
     if (!job) throw Object.assign(new Error("no-dashboard-job"), { status: 409 });
     if (job.stopping) return { accepted: true, stopping: true };
@@ -290,10 +443,15 @@ export class DashboardCoordinator extends EventEmitter {
     return { accepted: true, stopping: true };
   }
   shutdown() {
+    if (this.stopped) return;
+    this.stopped = true;
     this.cleanupController.abort();
     this.advisory.shutdown();
     this.intake.shutdown();
     this.drafts.shutdown();
+    if (this.attachedTimer) { clearInterval(this.attachedTimer); this.attachedTimer = null; }
+    // An attached runner was launched by a previous dashboard and must survive this
+    // process: that is what makes a dashboard restart a hot update instead of an abort.
     if (this.active && !this.active.stopping) {
       try { this.stop(); } catch { this.push("Stop message failed; inspect child process before exit"); }
     }
@@ -418,7 +576,7 @@ export function createDashboardServer({ root = ROOT, token, coordinator = new Da
       try { return reply(200, await coordinator.snapshot()); }
       catch { return reply(503, { error: "status-unavailable" }); }
     }
-    if (request.method === "POST" && ["/api/run", "/api/stop", "/api/merge", "/api/auto-merge", "/api/intake-assess", "/api/intake-submit", "/api/intake-clear", "/api/drafts-save", "/api/drafts-move", "/api/drafts-remove", "/api/drafts-assess", "/api/drafts-answer", "/api/drafts-batch", "/api/drafts-resolve", "/api/advisory-run", "/api/advisory-delete", "/api/model-settings"].includes(request.url)) {
+    if (request.method === "POST" && ["/api/run", "/api/stop", "/api/merge", "/api/auto-merge", "/api/update", "/api/intake-assess", "/api/intake-submit", "/api/intake-clear", "/api/drafts-save", "/api/drafts-move", "/api/drafts-remove", "/api/drafts-assess", "/api/drafts-answer", "/api/drafts-batch", "/api/drafts-resolve", "/api/advisory-run", "/api/advisory-delete", "/api/model-settings"].includes(request.url)) {
       if (request.headers.origin !== origin || request.headers["content-type"] !== "application/json") {
         return reply(403, { error: "invalid-request-origin" });
       }
@@ -427,6 +585,14 @@ export function createDashboardServer({ root = ROOT, token, coordinator = new Da
         if (request.url === "/api/model-settings") {
           try {const settings=await saveModelSettings(body,root);return reply(200,{settings});}
           catch(error){return reply(error.status ?? 400,{error:error.status ? error.message : "invalid-model-settings"});}
+        }
+        if (request.url === "/api/update") {
+          if (!body || Object.keys(body).sort().join(",") !== "action" || !["check", "apply"].includes(body.action)) return reply(400, { error: "invalid-body" });
+          if (body.action === "check") return reply(200, await coordinator.refreshUpdate({ force: true }));
+          // Allowed while a runner is active: loaded modules keep running, only new
+          // processes see the updated checkout.
+          const result = await coordinator.applyUpdate();
+          return reply(result.status === "updated" || result.status === "up-to-date" ? 200 : 409, result);
         }
         if (request.url === "/api/advisory-delete") {
           if (!body || Object.keys(body).sort().join(",") !== "lane,name" || typeof body.lane!=="string" || !(body.name===null || typeof body.name==="string")) return reply(400,{error:"invalid-body"});

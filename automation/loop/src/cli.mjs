@@ -13,6 +13,9 @@ import { localProgress } from "./status.mjs";
 import { prepareWorktreeRecovery } from "./worktree-sync.mjs";
 import { localTasks as getLocalTasks } from "./local-queue.mjs";
 import { cleanupMergedTasks } from "./merged-cleanup.mjs";
+import { writeRunnerState, recordRunnerExitSync, runnerLogPath } from "./runner-state.mjs";
+import { teeStdioToFile } from "./runner-log.mjs";
+import { checkUpdate, applyUpdate } from "./update.mjs";
 
 const HELP = `SOXU Agent Loop
 
@@ -30,6 +33,7 @@ Commands:
   watch        Poll GitHub tasks (bounded by policy; no --local or --dry-run)
   resume       Resume paused/interrupted tasks, or interpret a recovery sentence
   say          Execute a natural-language recovery instruction
+  update       Fast-forward the tool checkout (hot update); add --check to only compare
   help         Show this help
 
 Options:
@@ -163,6 +167,25 @@ switch (command) {
     }
     break;
   }
+  case "update": {
+    if (args.includes("--check") || dryRun) {
+      const check = await checkUpdate();
+      if (args.includes("--json")) { console.log(JSON.stringify(check, null, 2)); break; }
+      console.log("Tool checkout: " + (check.branch ?? "?") + " @ " + String(check.current ?? "?").slice(0, 8));
+      console.log("Upstream: " + (check.upstream ?? "none") + "  ahead=" + (check.ahead ?? "?") + " behind=" + (check.behind ?? "?"));
+      console.log("Working tree: " + (check.dirty === null ? "unknown" : check.dirty ? "dirty (apply refuses)" : "clean"));
+      console.log("Status: " + check.status + (check.error ? " (" + check.error + ")" : ""));
+      console.log(check.available ? "Update available: run without --check to fast-forward." : "Already current with upstream.");
+      break;
+    }
+    const result = await applyUpdate();
+    if (args.includes("--json")) { console.log(JSON.stringify(result, null, 2)); break; }
+    console.log("Hot update: " + result.status + " (" + String(result.previous ?? "?").slice(0, 8) + " -> " + String(result.current ?? "?").slice(0, 8) + ")");
+    if (result.error) console.log("Reason: " + result.error);
+    if (result.note) console.log(result.note);
+    if (result.status !== "updated" && result.status !== "up-to-date") process.exitCode = 1;
+    break;
+  }
   case "models": {
     const selections = await loadRoleModels();
     console.log("SOXU Pi model routing (no API credentials):");
@@ -240,7 +263,20 @@ switch (command) {
     }
     break;
   }
-  default: throw new Error(`Unknown command '${command}', expected doctor|status|models|seed-issues|once|loop|watch|resume|say`);
+  default: throw new Error(`Unknown command '${command}', expected doctor|status|models|seed-issues|once|loop|watch|resume|say|update`);
+}
+
+// A dashboard-restarted runner must be discoverable, so record identity and a durable
+// log before doing any work. Tasks already running keep the modules they loaded.
+if (process.env.SOXU_RUNNER_STATE === "1") {
+  const runnerCommand = process.argv[2] || "doctor";
+  const logPath = runnerLogPath(ROOT, process.pid);
+  teeStdioToFile(logPath);
+  await writeRunnerState({ command: runnerCommand, pid: process.pid, logPath }, ROOT);
+  process.once("exit", code => {
+    try { recordRunnerExitSync({ command: runnerCommand, pid: process.pid, exitCode: code }, ROOT); }
+    catch { /* Never block teardown on bookkeeping. */ }
+  });
 }
 
 // Releasing the IPC channel lets a forked runner terminate after settled tasks.
