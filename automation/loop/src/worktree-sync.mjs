@@ -87,7 +87,13 @@ async function inspect(root, state) {
     else if ((!EARLY.has(state.phase) && !RECHECK.has(state.phase)) || state.commit) info.reason = "advanced-phase";
     else { info.canSync = true; info.reason = info.dirty ? "dirty-sync-eligible" : null; }
   } catch (e) {
-    info.reason = "inspection-failed: " + (e.code ?? "git-error");
+    // Leftover directories and removed worktrees are common after cleanup; name them
+    // explicitly so an operator does not have to re-run Git commands to interpret them.
+    const detail = String(e?.message ?? e);
+    info.reason = /not a git repository|not a working tree/i.test(detail)
+      ? "not-a-worktree"
+      : e?.code === "ENOENT" ? "worktree-missing"
+      : "inspection-failed: " + (e?.kind ?? e?.code ?? "git-error");
   }
   return info;
 }
