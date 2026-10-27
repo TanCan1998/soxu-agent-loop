@@ -1,0 +1,25 @@
+name: Agent Loop tests
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [24, 26]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: TanCan1998/SOXU
+          ref: 01cf800ac1689fc73bfa03dea0f2ef308258dc40
+          path: target-project
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm test
+        env:
+          SOXU_PROJECT_ROOT: ${{ github.workspace }}/target-project

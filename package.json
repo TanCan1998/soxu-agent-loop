@@ -1,0 +1,13 @@
+{
+  "name": "soxu-agent-loop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "test": "node --test automation/loop/tests/*.test.mjs",
+    "agent": "node automation/loop/src/cli.mjs",
+    "dashboard": "node automation/loop/src/dashboard-cli.mjs",
+    "migrate": "node automation/loop/src/migrate-data.mjs"
+  }
+}

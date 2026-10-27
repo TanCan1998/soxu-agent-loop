@@ -1,5 +1,42 @@
 # SOXU Agent Loop
 
-Independent development orchestration and monitoring tools for [SOXU](https://github.com/TanCan1998/SOXU).
+SOXU 的开发调度器与本地监控 Dashboard。SOXU 桌面产品由 [SOXU](https://github.com/TanCan1998/SOXU) 单独维护。
 
-Migration is in progress; this repository is not yet ready for production use.
+本版本为迁移预览，尚未完成端到端发布验证。需 Node.js 24+、Git、GitHub CLI 和 Pi；目标项目的开发检查还需要项目自身的工具链和模型认证。
+
+## 配置与启动
+
+在 PowerShell 中显式指定目标项目的绝对路径。所有 Git、GitHub、任务和策略操作以该目录为准：
+
+```powershell
+$env:SOXU_PROJECT_ROOT = 'F:\workplace\pi\SOXU'
+node automation/loop/src/cli.mjs doctor
+node automation/loop/src/cli.mjs status --local
+node automation/loop/src/dashboard-cli.mjs
+```
+
+Dashboard 仅监听 127.0.0.1，访问令牌由启动时生成。默认继续使用目标项目的 `.soxu` 数据目录，与旧检查点兼容。Worktree 仍属于目标项目；迁移不会移动或删除它们。
+
+## 迁移运行数据
+
+先退出所有旧版和新版 Dashboard、Runner 和正在运行的 Agent，检查 `.soxu/locks`；存在锁时迁移拒绝执行。下例将全部受支持的检查点、报告、草稿和模型设置复制到一个**尚不存在**的目录，核对前后内容并保留原数据。旧程序无法识别新目录：切换后不要再运行旧程序，否则两份状态会分叉。
+
+```powershell
+node automation/loop/src/migrate-data.mjs 'F:\workplace\pi\SOXU' 'F:\workplace\pi\soxu-loop-data' --offline
+$env:SOXU_PROJECT_ROOT = 'F:\workplace\pi\SOXU'
+$env:SOXU_DATA_DIR = 'F:\workplace\pi\soxu-loop-data'
+node automation/loop/src/cli.mjs resume --local --dry-run
+```
+
+不设置 `SOXU_DATA_DIR` 时仍使用旧数据；切回旧目录前必须先停止进程并核对状态。任务锁保留在目标项目 `.soxu/locks`，以便新旧程序识别共同任务锁。旧程序不会强制遵守迁移约束，`--offline` 需要操作者确保所有进程已停止。
+
+## 验证
+
+```powershell
+$env:SOXU_PROJECT_ROOT = 'F:\workplace\pi\SOXU'
+npm test
+```
+
+测试包含 SOXU 目标项目的集成契约；运行前需准备 SOXU 工作副本。不要将模型密钥或本地运行数据提交到仓库。
+
+Dashboard 热更新尚未实现；不要依赖更新不中断正在执行的任务。
