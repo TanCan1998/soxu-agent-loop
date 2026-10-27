@@ -98,6 +98,17 @@ test("runner state records protocol identity and never adopts a mismatched proto
   } finally { await cleanup(root); }
 });
 
+test("the CLI registers its runner before executing the command", async () => {
+  // A hook placed after the awaited command only runs at exit, which silently breaks
+  // reattachment; keep the registration ahead of the dispatch.
+  const source = await readFile(new URL("../src/cli.mjs", import.meta.url), "utf8");
+  const hook = source.indexOf('process.env.SOXU_RUNNER_STATE === "1"');
+  const dispatch = source.indexOf("switch (command)");
+  assert.ok(hook > 0, "runner registration hook missing");
+  assert.ok(dispatch > 0, "command dispatch missing");
+  assert.ok(hook < dispatch, "runner registration must precede command dispatch");
+});
+
 test("a restarted dashboard attaches to a live runner, replays its log and can stop it", async () => {
   const root = await tempRoot("soxu-runner-attach-");
   const runner = await startFixtureRunner(root, "fixture: resumed task work");
