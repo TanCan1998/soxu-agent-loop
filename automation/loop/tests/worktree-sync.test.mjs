@@ -40,6 +40,7 @@ test("clean paused worktree syncs with new main and updates base", async () => {
   const f = await fixture();
   try {
     let rows = await inspectWorktrees({ root:f.root });
+    if (rows[0].reason === "worktree-identity-mismatch") console.error("worktree diagnostic", JSON.stringify({expected:f.wt, top:await git(f.wt,"rev-parse","--show-toplevel"), branch:await git(f.wt,"branch","--show-current"), expectedBranch:f.state.branch}));
     assert.equal(rows[0].behind, 1);
     assert.equal(rows[0].canSync, true);
     rows = await inspectWorktrees({ root:f.root, sync:true });
