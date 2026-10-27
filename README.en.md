@@ -16,3 +16,20 @@ node automation/loop/src/cli.mjs resume --local --dry-run
 The target must not exist. The command verifies copies and preserves old data. Locks remain under the target project to be shared with legacy runners. Old runners cannot enforce the migration boundary: do not start them after switching, or state may diverge. To revert, stop processes and reconcile both data directories first. The `--offline` flag requires the operator to ensure all processes are stopped.
 
 Run `npm test` with `SOXU_PROJECT_ROOT` pointing to a SOXU checkout; tests include target-project integration contracts. Never commit model credentials or local runtime data. Dashboard hot updates are not yet implemented.
+
+## Hot update without interrupting tasks
+
+An update only moves this repository's checkout. Running tasks keep the modules they already loaded, so new code applies to processes started afterwards.
+
+```powershell
+node automation/loop/src/cli.mjs update --check   # read-only comparison
+node automation/loop/src/cli.mjs update           # fast-forward + smoke gate + rollback
+```
+
+The dashboard exposes the same via `POST /api/update` with `{"action":"check"}` or `{"action":"apply"}`, plus a panel on the execution page.
+
+- Fast-forward only; a dirty tree, missing upstream or unreachable remote is refused with the reason.
+- After the merge a quick smoke test runs; on failure the checkout is reset to the previous commit and the result is reported as `rolled-back`.
+- Running tasks are never restarted. After a dashboard restart it reattaches to a live runner through the target project's `.soxu/runner/state.json` and durable log (`runner.attached = true`) and can still stop it.
+- Runners record `protocolVersion`; a mismatch is reported and its controls are refused (`409 incompatible-runner`) instead of guessed.
+- The dashboard itself needs one restart to use the new code; running tasks finish on the old code.

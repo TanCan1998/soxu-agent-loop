@@ -44,7 +44,7 @@ function page({ storage = new Map(), handler = () => response(), hidden = false,
   const ids = [
     "milestoneDialog", "milestoneTitle", "milestoneDetails", "closeMilestone", "token", "tokenLabel", "authPanel", "authNotice", "connect", "notice", "connection", "dot", "globalRun", "running", "pending", "done",
     "total", "badge", "runner", "updated", "stop", "tasks", "logs", "refresh", "copyLogs", "intakeRunState", "productReports", "productCopy", "productDelete", "productClear", "qualityReports", "qualityCopy", "qualityDelete", "qualityClear",
-    "navOverview", "navExecution", "navMonitor", "navRequirements", "navLanes", "navModels", "pageOverview", "pageExecution", "pageMonitor", "pageRequirements", "pageLanes", "pageModels", "modelSummary", "openModels", "closeModels", "reloadModels", "saveModels", "modelScope", "modelSearch", "modelInherit", "modelDialog", "modelGroups", "modelMessage", "logLimit", "logFilter", "followLogs", "logCount", "agentCards", "githubStatus", "autoMerge", "projectPhaseTitle", "projectPhaseDetail", "projectPhaseCount", "roadmapCards", "developmentLane", "productLane", "qualityLane", "lessonsStatus", "openProduct", "openQuality", "productDialog", "qualityDialog", "closeProduct", "closeQuality", "runProduct", "runQuality", "productRunState", "qualityRunState", "productReport", "qualityReport", "projectProgress", "projectProgressFill", "themeToggle", "openIntake", "intakeDialog", "intakeSummary", "queueList", "closeIntake", "requirement", "assessIntake", "intakeResult", "queueReady", "intakeMilestone", "submitIntake", "clearIntake", "draftList", "batchDrafts", "saveDraft", "saveAnswers",
+    "navOverview", "navExecution", "navMonitor", "navRequirements", "navLanes", "navModels", "pageOverview", "pageExecution", "pageMonitor", "pageRequirements", "pageLanes", "pageModels", "modelSummary", "openModels", "closeModels", "reloadModels", "saveModels", "modelScope", "modelSearch", "modelInherit", "modelDialog", "modelGroups", "modelMessage", "logLimit", "logFilter", "followLogs", "logCount", "agentCards", "githubStatus", "autoMerge", "updateStatus", "checkUpdate", "applyUpdate", "projectPhaseTitle", "projectPhaseDetail", "projectPhaseCount", "roadmapCards", "developmentLane", "productLane", "qualityLane", "lessonsStatus", "openProduct", "openQuality", "productDialog", "qualityDialog", "closeProduct", "closeQuality", "runProduct", "runQuality", "productRunState", "qualityRunState", "productReport", "qualityReport", "projectProgress", "projectProgressFill", "themeToggle", "openIntake", "intakeDialog", "intakeSummary", "queueList", "closeIntake", "requirement", "assessIntake", "intakeResult", "queueReady", "intakeMilestone", "submitIntake", "clearIntake", "draftList", "batchDrafts", "saveDraft", "saveAnswers",
   ];
   const elements = Object.fromEntries(ids.map(id => [id, node()]));
   const actions = ["once", "resume", "loop", "watch"].map(command => {
@@ -394,3 +394,25 @@ test("draft review requires a selection or custom answer before submission",asyn
  const field=app.elements.intakeResult.querySelectorAll("fieldset")[0];const custom=field.querySelector("textarea");custom.value="手工输入";field.dispatch("input");
  assert.equal(app.elements.submitIntake.disabled,false);
 });
+
+test("hot update panel reports availability and sends strict update actions", async () => {
+  const snapshot = { ...STATUS, protocolVersion: 1, update: { status: "ok", available: true, behind: 2, toolVersion: "0.1.0" } };
+  const app = page({ handler: path => path === "/api/status"
+    ? { ok: true, status: 200, json: async () => snapshot }
+    : { ok: true, status: 200, json: async () => ({ status: "updated", previous: "11111111", current: "2222222222", toolVersion: "0.2.0", protocolVersion: 1, restartRequired: true }) } });
+  app.elements.token.value = TOKEN;
+  app.elements.connect.dispatch("click");
+  await tick();
+  assert.match(app.elements.updateStatus.textContent, /有更新可用 · behind 2/);
+
+  app.elements.checkUpdate.dispatch("click");
+  await tick();
+  app.elements.applyUpdate.dispatch("click");
+  await tick();
+
+  const actions = app.requests.filter(request => request.path === "/api/update").map(request => JSON.parse(request.options.body).action);
+  assert.deepEqual(actions, ["check", "apply"]);
+  assert.match(app.elements.updateStatus.textContent, /已更新到 22222222 · 重启控制台后生效/);
+  assert.equal(app.elements.applyUpdate.disabled, false);
+});
+

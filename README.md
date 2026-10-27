@@ -42,3 +42,25 @@ npm test
 测试包含 SOXU 目标项目的集成契约；运行前需准备 SOXU 工作副本。不要将模型密钥或本地运行数据提交到仓库。
 
 Dashboard 热更新尚未实现；不要依赖更新不中断正在执行的任务。
+
+## 热更新（不中断任务）
+
+工具更新只移动本仓库的检出，不影响正在运行的任务：任务进程已经把所需模块加载进内存，新代码只对**之后**启动的进程生效。
+
+```powershell
+# 只检查，不写工作区
+node automation/loop/src/cli.mjs update --check
+
+# 应用：快速前进 + 冒烟门禁，失败自动回滚
+node automation/loop/src/cli.mjs update
+```
+
+Dashboard 提供同样能力：`POST /api/update`，请求体为 `{"action":"check"}` 或 `{"action":"apply"}`；执行页的「工具热更新」面板有对应按钮。
+
+行为与边界：
+
+- 只做 `git merge --ff-only`。工作区脏、没有 upstream、远端不可达都直接拒绝并说明原因。
+- 应用后跑一次快速冒烟（status 测试）；失败则 `git reset --hard` 回到更新前提交，返回 `rolled-back`。
+- 正在运行的任务不会被重启或中断。Dashboard 崩溃或重启后，会用目标项目的 `.soxu/runner/state.json` 与持久日志重新接管该任务（快照里 `runner.attached = true`），并且仍然可以停止它。
+- 运行器在状态文件里记录 `protocolVersion`。协议不匹配时只展示状态、拒绝控制动作（`409 incompatible-runner`），不做兼容性猜测。
+- “Dashboard 自身”要用新代码仍需重启一次；已在跑的任务继续使用旧代码直到结束。
