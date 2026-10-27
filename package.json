@@ -3,10 +3,22 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "test": "node --test automation/loop/tests/*.test.mjs",
     "agent": "node automation/loop/src/cli.mjs",
+    "agent:dashboard": "node automation/loop/src/dashboard-cli.mjs",
+    "agent:start": "node automation/loop/src/cli.mjs start",
+    "agent:loop": "node automation/loop/src/cli.mjs loop",
+    "agent:watch": "node automation/loop/src/cli.mjs watch",
+    "agent:status": "node automation/loop/src/cli.mjs status",
+    "agent:doctor": "node automation/loop/src/cli.mjs doctor",
+    "agent:models": "node automation/loop/src/cli.mjs models",
+    "agent:update": "node automation/loop/src/cli.mjs update",
+    "agent:cleanup": "node automation/loop/src/cli.mjs cleanup",
+    "agent:seed-issues": "node automation/loop/src/cli.mjs seed-issues",
     "dashboard": "node automation/loop/src/dashboard-cli.mjs",
     "migrate": "node automation/loop/src/migrate-data.mjs"
   }

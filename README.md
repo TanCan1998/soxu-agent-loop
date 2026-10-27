@@ -82,3 +82,15 @@ node automation/loop/src/cli.mjs update           # 从 GitHub 热更新（--che
 ```
 
 `once` 与 `resume` 已移除：`start` 在同一个受管子进程里先恢复、再按需执行下一批，避免两个 Runner 争抢工作树。页面上的按钮同为「启动」「启动循环」「启动监控」；阻塞任务不再有单独的“恢复此任务”入口，统一由「启动」处理（需先自行确认阻塞原因已解除）。
+
+## 一条命令打开控制台
+
+在**工具仓库根目录**打开终端即可，不需要先导出环境变量：
+
+```powershell
+pnpm agent:dashboard        # 等价：npm run agent:dashboard
+```
+
+启动时会打印实际使用的目标项目。`SOXU_PROJECT_ROOT` 未设置时自动回落到同级的 `../SOXU` 检出（打印 `(sibling checkout)`）；显式设置则始终优先；同级不存在时直接报错，不会猜路径。
+
+其余脚本同样是 `agent:<命令>`：`agent:start`、`agent:loop`、`agent:watch`、`agent:status`、`agent:doctor`、`agent:models`、`agent:update`、`agent:cleanup`、`agent:seed-issues`；`pnpm agent -- <参数>` 可透传任意子命令。
