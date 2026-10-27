@@ -5,13 +5,14 @@ import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {spawnSync} from "node:child_process";
 import {fileURLToPath} from "node:url";
+import{ROOT}from"../src/config.mjs";
 const migrate=fileURLToPath(new URL("../src/migrate-data.mjs",import.meta.url));
 const cli=fileURLToPath(new URL("../src/cli.mjs",import.meta.url));
 test("migration preserves legacy checkpoint and rejects wrong project binding",async()=>{
  const dir=await mkdtemp(join(tmpdir(),"soxu-migrate-")), project=join(dir,"project"), target=join(dir,"data");
  try {
   await mkdir(join(project,".soxu/checkpoints"),{recursive:true});await mkdir(join(project,"automation"));await mkdir(join(project,"tasks/backlog"),{recursive:true});
-  await cp(join(process.env.SOXU_PROJECT_ROOT,"automation/policy.json"),join(project,"automation/policy.json"));
+  await cp(join(ROOT,"automation/policy.json"),join(project,"automation/policy.json"));
   await writeFile(join(project,"tasks/backlog/TASK-001.md"),"# Target task\n");
   const saved=JSON.stringify({issue:{number:1,title:"[TASK-001] Target task"},local:true,status:"paused",phase:"checks"});
   await writeFile(join(project,".soxu/checkpoints/issue-1.json"),saved);

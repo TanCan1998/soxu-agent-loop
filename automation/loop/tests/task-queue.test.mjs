@@ -16,10 +16,13 @@ test('real backlog validates, and only 001/002 are initially schedulable', async
   const catalog = await loadTaskCatalog();
   const plan = planTaskQueue(catalog, new Set());
   assert.deepEqual(plan.ready.map(t => t.id), ['TASK-001','TASK-002']);
-  assert.deepEqual(plan.waiting.map(t => t.id), ['TASK-003','TASK-004','TASK-005','TASK-006']);
+  assert.deepEqual(plan.waiting.map(t => t.id), ['TASK-003','TASK-004','TASK-006']);
   const second = planTaskQueue(catalog,new Set(['TASK-001','TASK-002']));
-  assert.deepEqual(second.ready.map(t=>t.id),['TASK-003','TASK-004','TASK-005']);
-  assert.deepEqual(planTaskQueue(catalog,new Set(catalog.slice(0,5).map(t=>t.id))).ready.map(t=>t.id),['TASK-006']);
+  assert.deepEqual(second.ready.map(t=>t.id),['TASK-003','TASK-004']);
+  assert.deepEqual(second.waiting.map(t=>t.id),['TASK-006']);
+  // TASK-005 is archived: it never re-enters the queue but still satisfies dependencies.
+  assert.ok(catalog.some(t => t.id === 'TASK-005' && t.archived), 'TASK-005 must stay in the catalog as archived');
+  assert.deepEqual(planTaskQueue(catalog,new Set(catalog.map(t=>t.id))).ready.map(t=>t.id),[]);
 });
 
 test('frontmatter rejects duplicate dependencies, unknown refs, cycles and inconsistent ids', () => {

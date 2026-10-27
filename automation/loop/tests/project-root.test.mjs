@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ROOT } from "../src/config.mjs";
 
 const config = fileURLToPath(new URL("../src/config.mjs", import.meta.url));
 const toolRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -60,7 +61,7 @@ test("relocated CLI reads the target's legacy checkpoint without writing it", as
   try {
     await cp(new URL("../src", import.meta.url), join(tool, "automation/loop/src"), {recursive:true});
     await mkdir(join(project, "automation"), {recursive:true});
-    await cp(join(process.env.SOXU_PROJECT_ROOT, "automation/policy.json"), join(project, "automation/policy.json"));
+    await cp(join(ROOT, "automation/policy.json"), join(project, "automation/policy.json"));
     await mkdir(join(project, "tasks/backlog"), {recursive:true});
     await writeFile(join(project, "tasks/backlog/TASK-001.md"), "# Target task\n");
     await mkdir(join(project, ".soxu/checkpoints"), {recursive:true});
