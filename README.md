@@ -55,7 +55,7 @@ node automation/loop/src/cli.mjs update --check
 node automation/loop/src/cli.mjs update
 ```
 
-Dashboard 提供同样能力：`POST /api/update`，请求体为 `{"action":"check"}` 或 `{"action":"apply"}`；执行页的「工具热更新」面板有对应按钮。
+Dashboard 提供同样能力：`POST /api/update`，请求体为 `{"action":"check"}` 或 `{"action":"apply"}`；执行页的「热更新」面板有一个带 GitHub 图标的「从 GitHub 更新」按钮：先检查，有更新再确认应用。
 
 行为与边界：
 
