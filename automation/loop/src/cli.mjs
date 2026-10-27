@@ -17,6 +17,19 @@ import { writeRunnerState, recordRunnerExitSync, runnerLogPath } from "./runner-
 import { teeStdioToFile } from "./runner-log.mjs";
 import { checkUpdate, applyUpdate } from "./update.mjs";
 
+// Register before any command runs: `start` is awaited at top level, so a hook at the
+// bottom of the file would only run after the task finished and be useless for reattach.
+if (process.env.SOXU_RUNNER_STATE === "1") {
+  const runnerCommand = process.argv[2] || "doctor";
+  const logPath = runnerLogPath(ROOT, process.pid);
+  teeStdioToFile(logPath);
+  await writeRunnerState({ command: runnerCommand, pid: process.pid, logPath }, ROOT);
+  process.once("exit", code => {
+    try { recordRunnerExitSync({ command: runnerCommand, pid: process.pid, exitCode: code }, ROOT); }
+    catch { /* Never block teardown on bookkeeping. */ }
+  });
+}
+
 const HELP = `SOXU Agent Loop
 
 Usage:
@@ -270,19 +283,6 @@ switch (command) {
     break;
   }
   default: throw new Error(`Unknown command '${command}', expected doctor|status|models|seed-issues|start|loop|watch|say|update`);
-}
-
-// A dashboard-restarted runner must be discoverable, so record identity and a durable
-// log before doing any work. Tasks already running keep the modules they loaded.
-if (process.env.SOXU_RUNNER_STATE === "1") {
-  const runnerCommand = process.argv[2] || "doctor";
-  const logPath = runnerLogPath(ROOT, process.pid);
-  teeStdioToFile(logPath);
-  await writeRunnerState({ command: runnerCommand, pid: process.pid, logPath }, ROOT);
-  process.once("exit", code => {
-    try { recordRunnerExitSync({ command: runnerCommand, pid: process.pid, exitCode: code }, ROOT); }
-    catch { /* Never block teardown on bookkeeping. */ }
-  });
 }
 
 // Releasing the IPC channel lets a forked runner terminate after settled tasks.
