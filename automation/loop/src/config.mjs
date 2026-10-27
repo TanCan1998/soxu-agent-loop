@@ -17,7 +17,9 @@ export function dataRoot(root = ROOT) {
   let binding;
   try { binding = JSON.parse(readFileSync(join(directory, ".soxu-project.json"), "utf8")); }
   catch { throw new Error("External data directory is not initialized; run the migration command first"); }
-  if (binding.version !== 1 || binding.project !== realpathSync(ROOT)) throw new Error("External data directory belongs to a different project");
+  const actual = realpathSync(ROOT);
+  const matches = typeof binding.project === "string" && (process.platform === "win32" ? binding.project.toLowerCase() === actual.toLowerCase() : binding.project === actual);
+  if (binding.version !== 1 || !matches) throw new Error("External data directory belongs to a different project");
   return directory;
 }
 export async function policy() {

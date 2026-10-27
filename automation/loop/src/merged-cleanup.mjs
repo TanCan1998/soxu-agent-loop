@@ -1,6 +1,6 @@
 import { dataRoot } from "./config.mjs";
 import { open, readFile, readdir, rm, lstat, realpath, mkdir } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join, resolve, relative } from "node:path";
 import { run } from "./process.mjs";
 import { readCheckpoint, writeCheckpoint } from "./checkpoint.mjs";
 
@@ -55,7 +55,11 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
         else if(holders.length>1 || holders.some(x=>resolve(x.path)!==expected || x.locked)) localStatus="other-worktree";
         else {
           if(holders.length){
-            const st=await lstat(expected);if(!st.isDirectory() || st.isSymbolicLink() || await realpath(expected)!==expected || await realpath(managed)!==managed) throw Error("unsafe-worktree-path");
+            const st=await lstat(expected), parent=await lstat(managed);
+            const realParent=await realpath(managed), realExpected=await realpath(expected);
+            const actualRel=relative(realParent,realExpected), expectedRel=relative(managed,expected);
+            const same=process.platform==="win32" ? actualRel.toLowerCase()===expectedRel.toLowerCase() : actualRel===expectedRel;
+            if(!st.isDirectory() || st.isSymbolicLink() || !parent.isDirectory() || parent.isSymbolicLink() || !same) throw Error("unsafe-worktree-path");
             const statusRaw=(await exec("git",["status","--porcelain=v1","-z","--untracked-files=normal","--ignored=matching"],{cwd:expected})).stdout;
             if(statusRaw.length>=990000) throw Error("worktree-status-too-large");
             const status=statusRaw.split("\0").filter(Boolean);

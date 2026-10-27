@@ -1,4 +1,4 @@
-import { open, readFile, rm, mkdir, stat } from "node:fs/promises";
+import { open, readFile, rm, mkdir, stat, realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { ROOT } from "./config.mjs";
 import { git, run } from "./process.mjs";
@@ -55,7 +55,7 @@ async function worktreeFor(issue, local, state) {
     if (!state.branch?.startsWith(`agent/${local ? "local" : "github"}-issue-${issue.number}-`) && !state.branch?.startsWith(`agent/issue-${issue.number}-`)) throw new Error("Saved branch mismatch");
     const root = await git(["rev-parse", "--show-toplevel"], state.directory);
     const branch = await git(["branch", "--show-current"], state.directory);
-    if (resolve(root).toLowerCase() !== resolve(state.directory).toLowerCase() || branch !== state.branch) throw new Error("Saved Worktree identity mismatch; manual inspection required");
+    if ((await realpath(root)).toLowerCase() !== (await realpath(state.directory)).toLowerCase() || branch !== state.branch) throw new Error("Saved Worktree identity mismatch; manual inspection required");
     return { branch, directory: state.directory };
   }
   await mkdir(WORKTREES, { recursive: true });

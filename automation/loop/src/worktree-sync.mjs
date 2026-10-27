@@ -65,7 +65,7 @@ async function inspect(root, state) {
     const branch = await git(["branch", "--show-current"], state.directory);
     const prefix = "agent/" + (state.local ? "local" : "github") + "-issue-" + state.issue.number + "-";
     const legacy = "agent/issue-" + state.issue.number + "-";
-    if (resolve(top).toLowerCase() !== resolve(state.directory).toLowerCase() ||
+    if ((await realpath(top)).toLowerCase() !== wtReal.toLowerCase() ||
         branch !== state.branch || !(branch.startsWith(prefix) || branch.startsWith(legacy))) {
       info.reason = "worktree-identity-mismatch"; return info;
     }
