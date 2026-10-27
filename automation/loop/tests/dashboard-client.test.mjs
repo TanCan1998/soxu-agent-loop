@@ -37,10 +37,12 @@ function node() {
     querySelectorAll(selector) { const all=[];const visit=n=>{for(const c of n.children || []){if(selector==='fieldset' && c.tagName==='fieldset' || selector==='input:checked' && c.tagName==='input' && c.checked)all.push(c);visit(c);}};visit(result);return all; },
     querySelector(selector) { const find=n=>{for(const c of n.children || []){if(c.tagName===selector)return c;const hit=find(c);if(hit)return hit;}return null;};return find(result); },
     remove() { if (result.parent) { const i = result.parent.children.indexOf(result); if (i >= 0) result.parent.children.splice(i,1); } },
+    appendChild(item) { result.append(item); return item; },
+    removeChild(item) { const i = children.indexOf(item); if (i >= 0) children.splice(i,1); },
   };
   return result;
 }
-function page({ storage = new Map(), handler = () => response(), hidden = false, preferences = new Map(), streamSupport = false } = {}) {
+function page({ storage = new Map(), handler = () => response(), hidden = false, preferences = new Map(), streamSupport = false, navigatorClipboard, execCommand = () => false, secureContext } = {}) {
   const ids = [
     "milestoneDialog", "milestoneTitle", "milestoneDetails", "closeMilestone", "token", "tokenLabel", "authPanel", "authNotice", "connect", "notice", "connection", "dot", "globalRun", "running", "pending", "done",
     "total", "badge", "runner", "updated", "stop", "tasks", "logs", "refresh", "copyLogs", "intakeRunState", "productReports", "productCopy", "productDelete", "productClear", "qualityReports", "qualityCopy", "qualityDelete", "qualityClear",
@@ -59,17 +61,22 @@ function page({ storage = new Map(), handler = () => response(), hidden = false,
     querySelectorAll(selector) { if (selector === ".agent-elapsed") return []; if (selector === "[data-command], [data-resume-issue]") return [...actions, ...elements.tasks.children.flatMap(card => card.children.filter(child => child.dataset?.resumeIssue))]; assert.equal(selector, "[data-command]"); return actions; },
     createElement(tag) { const n=node();n.tagName=tag;return n; },
     createTextNode(value) { return { textContent: value }; },
+    body: node(),
+    execCommand(command) { return command === "copy" ? Boolean(execCommand()) : false; },
     addEventListener(type, fn) { listeners.set(type, fn); },
     dispatch(type) { listeners.get(type)?.(); },
   };
   const requests = [], clipboard=[];
+  // Default clipboard stub must be built inside the body: parameter defaults cannot see
+  // the body-scoped `clipboard` binding.
+  const navClipboard = navigatorClipboard === undefined ? { writeText: async text => clipboard.push(text) } : navigatorClipboard;
   const sessionStorage = {
     getItem(key) { return storage.get(key) ?? null; },
     setItem(key, value) { storage.set(key, String(value)); },
     removeItem(key) { storage.delete(key); },
   };
   runInNewContext(APP, {
-    document, navigator:{clipboard:{writeText:async text=>clipboard.push(text)}}, window:{addEventListener(){}}, ...(streamSupport ? {AbortController, TextDecoder} : {}), sessionStorage, localStorage: { getItem(key) { return preferences.get(key) ?? null; }, setItem(key, value) { preferences.set(key, String(value)); } },
+    document, navigator: navClipboard ? { clipboard: navClipboard } : {}, window:{addEventListener(){}, isSecureContext: secureContext}, ...(streamSupport ? {AbortController, TextDecoder} : {}), sessionStorage, localStorage: { getItem(key) { return preferences.get(key) ?? null; }, setItem(key, value) { preferences.set(key, String(value)); } },
     setInterval() {}, setTimeout() { return 1; }, clearTimeout() {},
     AbortSignal: { timeout() { return undefined; } },
     fetch: async (path, options) => {
@@ -362,6 +369,38 @@ test("copy logs uses the displayed filtered and limited rows",async()=>{
   app.elements.copyLogs.dispatch("click");await tick();
   assert.equal(app.clipboard[0].split("\n").length,15);
   assert.match(app.clipboard[0],/message-1/);assert.doesNotMatch(app.clipboard[0],/message-2(?:\n|$)/);
+});
+
+test("copy falls back to execCommand when the page is not a secure context", async () => {
+  const rows = [{ seq:1, stream:"stdout", time:"2026-10-27T00:00:00Z", message:"lan-message" }];
+  // Android Chrome over plain HTTP: no navigator.clipboard, and the modern API would reject.
+  const app = page({
+    handler: () => ({ ok:true, status:200, json: async () => ({ ...STATUS, log: rows }) }),
+    navigatorClipboard: null,
+    execCommand: () => true,
+  });
+  app.elements.token.value = TOKEN;
+  app.elements.connect.dispatch("click");
+  await tick();
+  app.elements.copyLogs.dispatch("click");
+  await tick();
+  assert.match(app.elements.notice.textContent, /已复制到剪贴板/);
+});
+
+test("copy reports a manual hint when the browser blocks every clipboard path", async () => {
+  const rows = [{ seq:1, stream:"stdout", time:"2026-10-27T00:00:00Z", message:"lan-message" }];
+  const app = page({
+    handler: () => ({ ok:true, status:200, json: async () => ({ ...STATUS, log: rows }) }),
+    navigatorClipboard: { writeText: async () => { throw new Error("not allowed"); } },
+    execCommand: () => false,
+    secureContext: false,
+  });
+  app.elements.token.value = TOKEN;
+  app.elements.connect.dispatch("click");
+  await tick();
+  app.elements.copyLogs.dispatch("click");
+  await tick();
+  assert.match(app.elements.notice.textContent, /长按选择文本/);
 });
 
 test("active intake and advisory report show elapsed state",async()=>{

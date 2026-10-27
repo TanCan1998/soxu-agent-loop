@@ -483,9 +483,34 @@ async function openStream(token) {
     }
   }
 }
+/**
+ * execCommand("copy") is the only option on a non-secure origin: Android Chrome over
+ * plain HTTP on the LAN exposes no navigator.clipboard, so the modern API alone fails.
+ */
+function legacyCopy(text) {
+  if (!document.body) return false;
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.top = "-1000px";
+  document.body.appendChild(area);
+  try {
+    area.focus?.();
+    area.select?.();
+    area.setSelectionRange?.(0, text.length);
+    return Boolean(document.execCommand?.("copy"));
+  } catch { return false; }
+  finally { document.body.removeChild(area); }
+}
 async function copyText(text) {
-  try {if (!text) throw new Error("empty"); await navigator.clipboard.writeText(text);notice("已复制到剪贴板。");}
-  catch {notice("复制失败，请检查浏览器剪贴板权限。 ");}
+  if (!text) { notice("没有可复制的内容。"); return; }
+  if (window.isSecureContext !== false && navigator.clipboard?.writeText) {
+    try { await navigator.clipboard.writeText(text); notice("已复制到剪贴板。"); return; }
+    catch { /* Fall through to the legacy path. */ }
+  }
+  if (legacyCopy(text)) { notice("已复制到剪贴板。"); return; }
+  notice("此页面不是安全上下文，浏览器禁止自动复制；请长按选择文本后手动复制。");
 }
 function copyButton(text, label) {
   const button=element("button","⧉","icon-button"); button.type="button";
