@@ -1,0 +1,22 @@
+import {test} from "node:test";
+import assert from "node:assert/strict";
+import {mkdtemp,mkdir,writeFile,rm,access,open} from "node:fs/promises";
+import {tmpdir} from "node:os";
+import {join} from "node:path";
+import {run} from "../src/process.mjs";
+import {writeCheckpoint} from "../src/checkpoint.mjs";
+import {cleanupMergedTasks} from "../src/merged-cleanup.mjs";
+
+async function fixture(fn){const tmp=await mkdtemp(join(tmpdir(),"soxu-cleanup-")),root=join(tmp,"repo"),wt=join(tmp,"soxu-worktrees","github-issue-1-example"),remote=join(tmp,"remote.git"),branch="agent/github-issue-1-example";
+ const git=async(args,cwd=root)=>run("git",args,{cwd});
+ try {await mkdir(root);await git(["init","--bare",remote],tmp);await git(["init","-b","main"]);await git(["config","user.email","test@example.com"]);await git(["config","user.name","Test"]);await writeFile(join(root,".gitignore"),"node_modules/\ntarget/\ndist/\n.env\n");await git(["add",".gitignore"]);await git(["commit","-m","initial"]);await git(["remote","add","origin",remote]);await git(["push","-u","origin","main"]);await mkdir(join(tmp,"soxu-worktrees"));await git(["worktree","add","-b",branch,wt,"main"]);await writeFile(join(wt,"change"),"change");await git(["add","change"],wt);await git(["commit","-m","feature"],wt);const sha=(await git(["rev-parse","HEAD"],wt)).stdout.trim();await git(["push","origin",branch],wt);
+ const state={issue:{number:1},local:false,status:"done",phase:"done",branch,commit:sha,directory:wt,pr:"https://github.com/a/b/pull/2"};await writeCheckpoint(state,join(root,".soxu","checkpoints"));let pr={state:"MERGED",mergedAt:"2026-01-01T00:00:00Z",baseRefName:"main",headRefName:branch,headRefOid:sha,isCrossRepository:false};
+ const execute=async(bin,args,opts)=>bin==="gh"?{code:0,stdout:JSON.stringify(args[0]==="repo"?{nameWithOwner:"a/b"}:pr)}:["remote get-url origin","remote get-url --push origin"].includes(args.join(" "))?{code:0,stdout:"https://github.com/a/b.git\n"}:run(bin,args,opts);
+ const clean=()=>cleanupMergedTasks(root,{execute,log:()=>{}});
+ await fn({root,wt,remote,branch,sha,state,git,clean,setPr:x=>{pr={...pr,...x};}});
+ }finally{await rm(tmp,{recursive:true,force:true,maxRetries:5});}}
+test("merged task removes clean worktree and both exact branch refs; repeat is safe",()=>fixture(async x=>{await mkdir(join(x.wt,"node_modules"));await writeFile(join(x.wt,"node_modules","generated"),"cache");await mkdir(join(x.wt,"target"));await writeFile(join(x.wt,"target","build"),"cache");const [result]=await x.clean();assert.equal(result.status,"cleaned");await assert.rejects(()=>access(x.wt));const local=await run("git",["show-ref","--verify",`refs/heads/${x.branch}`],{cwd:x.root,allowFailure:true});assert.notEqual(local.code,0);assert.equal((await x.git(["ls-remote","--heads","origin",`refs/heads/${x.branch}`])).stdout.trim(),"");assert.deepEqual(await x.clean(),[]);}));
+test("dirty and ignored user data preserve local worktree and branch",()=>fixture(async x=>{await writeFile(join(x.wt,".env"),"private");const [r]=await x.clean();assert.equal(r.local,"dirty");await access(join(x.wt,".env"));await x.git(["show-ref","--verify",`refs/heads/${x.branch}`]);assert.equal(r.remote,"deleted");}));
+test("unmerged, changed PR head and active lock preserve everything",()=>fixture(async x=>{x.setPr({state:"OPEN",mergedAt:null});assert.equal((await x.clean())[0].status,"not-verified");x.setPr({state:"MERGED",mergedAt:"now",headRefOid:"f".repeat(40)});assert.equal((await x.clean())[0].status,"not-verified");await mkdir(join(x.root,".soxu","locks"),{recursive:true});const h=await open(join(x.root,".soxu","locks","github-issue-1.lock"),"w");await h.close();assert.equal((await x.clean())[0].status,"locked");await access(x.wt);}));
+test("remote ref advanced after merge is not deleted and local copy is preserved",()=>fixture(async x=>{await writeFile(join(x.wt,"change"),"more");await x.git(["add","change"],x.wt);await x.git(["commit","-m","new"],x.wt);await x.git(["push","origin",x.branch],x.wt);const [r]=await x.clean();assert.equal(r.remote,"changed");await access(x.wt);}));
+test("manually removed worktree and refs are recorded as cleaned",()=>fixture(async x=>{await x.git(["worktree","remove",x.wt]);await x.git(["branch","-D",x.branch]);await x.git(["push","origin",`:${x.branch}`]);const [r]=await x.clean();assert.equal(r.status,"cleaned");assert.equal(r.local,"absent");assert.equal(r.remote,"absent");assert.deepEqual(await x.clean(),[]);}));

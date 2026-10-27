@@ -1,0 +1,29 @@
+name: Agent Loop tests
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: agent-loop-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [24, 26]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: TanCan1998/SOXU
+          ref: main
+          path: target-project
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm test
+        env:
+          SOXU_PROJECT_ROOT: ${{ github.workspace }}/target-project
