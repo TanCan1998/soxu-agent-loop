@@ -60,7 +60,7 @@ test("strict localhost auth, read-only status and explicit CSRF checks", async()
     assert.equal((await call(port,{token:"b".repeat(48)})).status,401);
     assert.equal((await call(port,{host:"evil.example"})).status,403);
     assert.equal((await call(port,{origin:"https://evil.example"})).status,403);
-    assert.equal((await call(port,{path:"/api/run",method:"POST",body:{command:"once"}})).status,403);
+    assert.equal((await call(port,{path:"/api/run",method:"POST",body:{command:"start"}})).status,403);
     assert.equal((await call(port,{path:"/api/run",method:"POST",origin,body:{command:"rm -rf"}})).status,400);
     assert.equal((await call(port,{path:"/api/stop",method:"POST",origin,body:{}})).status,409);
     const response=await call(port);
@@ -88,12 +88,12 @@ test("dashboard only controls its own fork via IPC and rejects overlapping runs"
   const spawn=(file,args,options)=>{const child=new EventEmitter();child.pid=54321;child.connected=true;child.stdout=new PassThrough();child.stderr=new PassThrough();child.messages=[];child.send=msg=>child.messages.push(msg);children.push({file,args,options,child});return child;};
   const coordinator=new DashboardCoordinator({root,spawn,githubStatus});
   try{
-    const result=await coordinator.start("resume");
-    assert.equal(result.command,"resume");
-    assert.deepEqual(children[0].args,["resume"]);
+    const result=await coordinator.start("start");
+    assert.equal(result.command,"start");
+    assert.deepEqual(children[0].args,["start"]);
     assert.equal(children[0].options.env.SOXU_PROJECT_ROOT,root);
     assert.notEqual(children[0].file,join(root,"automation","loop","src","cli.mjs"));
-    await assert.rejects(()=>coordinator.start("once"),error=>error.status===409);
+    await assert.rejects(()=>coordinator.start("start"),error=>error.status===409);
     children[0].child.stdout.write("pi safe log\n");
     children[0].child.stderr.write("token=topsecret\n");
     const state=await coordinator.snapshot();
@@ -106,7 +106,7 @@ test("dashboard only controls its own fork via IPC and rejects overlapping runs"
     children[0].child.emit("exit",0,null);
     assert.equal((await coordinator.snapshot()).runner,null);
     children[0].child.emit("close",0,null);
-    assert.equal((await coordinator.snapshot()).log.filter(x => x.message.startsWith("Finished resume")).length,1);
+    assert.equal((await coordinator.snapshot()).log.filter(x => x.message.startsWith("Finished start")).length,1);
   }finally{await cleanup(root,coordinator);}
 });
 
@@ -117,13 +117,13 @@ test("existing live worktree lock blocks dashboard-owned runner",async()=>{
   try{
     await mkdir(join(root,".soxu","locks"),{recursive:true});
     await writeFile(join(root,".soxu","locks","github-issue-1.lock"),JSON.stringify({pid:process.pid}));
-    await assert.rejects(()=>coordinator.start("once"),error=>error.status===409);
+    await assert.rejects(()=>coordinator.start("start"),error=>error.status===409);
     assert.equal(spawned,0);
     assert.equal((await coordinator.snapshot()).externalLocks,1);
   }finally{await cleanup(root,coordinator);}
 });
 
-test("explicit blocked recovery validates checkpoint and launches only selected issue", async()=>{
+test("start replaces the old once/resume entries and per-task recovery is gone", async()=>{
   const root=await fixture(), children=[];
   const spawn=(file,args)=>{const child=new EventEmitter();child.connected=true;child.stdout=new PassThrough();child.stderr=new PassThrough();child.send=()=>{};children.push({args,child});return child;};
   const coordinator=new DashboardCoordinator({root,spawn,githubStatus});
@@ -133,15 +133,15 @@ test("explicit blocked recovery validates checkpoint and launches only selected 
     await new Promise((ok,fail)=>{server.once("error",fail);server.listen(0,"127.0.0.1",ok)});
     const port=server.address().port, origin=`http://127.0.0.1:${port}`;
     const post=body=>call(port,{path:"/api/run",method:"POST",origin,body});
-    assert.equal((await post({command:"resume-blocked",issue:"1"})).status,400);
-    assert.equal((await post({command:"resume-blocked",issue:2})).status,409);
-    assert.equal((await post({command:"resume-blocked",issue:1,extra:true})).status,400);
-    assert.equal((await post({command:"resume-blocked",issue:1})).status,202);
-    assert.deepEqual(children[0].args,["resume","--blocked","--issue","1"]);
-    assert.equal((await post({command:"resume-blocked",issue:1})).status,409);
-    children[0].child.emit("exit",0,null);
-    await writeCheckpoint({issue:{number:1},local:false,status:"paused",phase:"checks"},join(root,".soxu","checkpoints"));
-    assert.equal((await post({command:"resume-blocked",issue:1})).status,409);
+    // Removed commands stay rejected instead of silently starting something else.
+    for (const command of ["once","resume","resume-blocked"]) {
+      assert.equal((await post({command})).status,400,command + " must be rejected");
+    }
+    // "start" takes no per-task selector: paused and blocked are handled together.
+    assert.equal((await post({command:"start",issue:1})).status,400);
+    assert.equal((await post({command:"start"})).status,202);
+    assert.deepEqual(children[0].args,["start"]);
+    assert.equal((await post({command:"start"})).status,409);
     assert.equal(children.length,1);
   } finally {await new Promise(resolve=>server.close(resolve));await cleanup(root,coordinator);}
 });

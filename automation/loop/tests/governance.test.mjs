@@ -11,7 +11,7 @@ test('Chinese and English README are present with reciprocal navigation and matc
   const en=await load('README.en.md');
   assert.match(zh, /\[English\]\(README\.en\.md\)/);
   assert.match(en, /\[简体中文\]\(README\.md\)/);
-  for(const [legacy, current] of [['pnpm agent:models','cli.mjs models'],['pnpm agent:status','cli.mjs status'],['pnpm agent:doctor','cli.mjs doctor'],['pnpm agent:once','cli.mjs once'],['pnpm agent:loop','cli.mjs loop'],['pnpm agent:resume','cli.mjs resume'],['pnpm agent:dashboard','dashboard-cli.mjs'],['pnpm tauri:dev','pnpm tauri:dev']]) {
+  for(const [legacy, current] of [['pnpm agent:models','cli.mjs models'],['pnpm agent:status','cli.mjs status'],['pnpm agent:doctor','cli.mjs doctor'],['pnpm agent:start','cli.mjs start'],['pnpm agent:loop','cli.mjs loop'],['pnpm agent:dashboard','dashboard-cli.mjs'],['pnpm tauri:dev','pnpm tauri:dev']]) {
     assert.ok(zh.includes(legacy) || zh.includes(current), `Chinese README missing ${current}`);
     assert.ok(en.includes(legacy) || en.includes(current), `English README missing ${current}`);
   }

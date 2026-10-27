@@ -28,7 +28,8 @@ import {
 import { checkUpdate, applyUpdate as applyToolUpdate } from "./update.mjs";
 
 export const DASHBOARD_PORT = 47321;
-const COMMANDS = new Set(["once", "resume", "loop", "watch"]);
+// One entry point: "start" recovers paused/blocked tasks, otherwise runs the next batch.
+const COMMANDS = new Set(["start", "loop", "watch"]);
 const GROUPS = ["running", "paused", "blocked", "pending", "done"];
 const MAX_LOGS = 500;
 const MAX_STREAM_CLIENTS = 8;
@@ -328,22 +329,15 @@ export class DashboardCoordinator extends EventEmitter {
       note: "Task phase is a checkpoint, not proof of a live Pi process; controls affect only dashboard-launched jobs.",
     };
   }
-  async start(command, issue = null) {
-    if (!COMMANDS.has(command) && command !== "resume-blocked") throw Object.assign(new Error("unsupported-command"), { status: 400 });
+  async start(command) {
+    if (!COMMANDS.has(command)) throw Object.assign(new Error("unsupported-command"), { status: 400 });
     if (this.reserved || this.active) throw Object.assign(new Error("runner-busy"), { status: 409 });
     // A runner left by a previous dashboard still owns the worktrees.
     if (await this.syncRunner()) throw Object.assign(new Error("runner-busy"), { status: 409 });
     this.reserved = true; // reserve before awaiting disk I/O to reject simultaneous requests
     try {
       if (await liveExternalLocks(this.root)) throw Object.assign(new Error("external-runner-active"), { status: 409 });
-      let args = [command];
-      if (command === "resume-blocked") {
-        if (!Number.isSafeInteger(issue) || issue <= 0 || issue >= 1e9) throw Object.assign(new Error("invalid-issue"), { status: 400 });
-        const state = await readCheckpoint(issue, join(dataRoot(this.root), "checkpoints"));
-        if (!state || state.status !== "blocked" || state.issue?.number !== issue || state.local === true)
-          throw Object.assign(new Error("task-not-blocked"), { status: 409 });
-        args = ["resume", "--blocked", "--issue", String(issue)];
-      }
+      const args = [command];
       const script = join(TOOL_ROOT, "automation", "loop", "src", "cli.mjs");
       // Detached so that restarting the dashboard (hot update) cannot kill a run.
       const child = this.spawn(script, args, {
@@ -368,7 +362,7 @@ export class DashboardCoordinator extends EventEmitter {
       this.phases.clear();
       this.taskModels.clear();
       child.on("message", data => { if (this.active === job) this.receiveTelemetry(data); });
-      this.push(`Started ${command}${issue ? ` #${issue}` : ""} (dashboard-owned)`);
+      this.push(`Started ${command} (dashboard-owned)`);
       this.emit("dashboard:event", { type: "status", data: {} });
       const attach = (stream, pipe) => {
         if (!pipe) return;
@@ -629,12 +623,8 @@ export function createDashboardServer({ root = ROOT, token, coordinator = new Da
         if (request.url === "/api/run") {
           if (!body || typeof body !== "object" || Array.isArray(body) || typeof body.command !== "string")
             return reply(400, { error: "invalid-command" });
-          const keys = Object.keys(body);
-          if (body.command === "resume-blocked") {
-            if (keys.length !== 2 || !keys.includes("issue")) return reply(400, { error: "invalid-command" });
-            return reply(202, await coordinator.start(body.command, body.issue));
-          }
-          if (keys.length !== 1) return reply(400, { error: "invalid-command" });
+          // Per-task recovery is gone: "start" handles paused and blocked uniformly.
+          if (Object.keys(body).length !== 1) return reply(400, { error: "invalid-command" });
           return reply(202, await coordinator.start(body.command));
         }
         if (request.url === "/api/merge") {

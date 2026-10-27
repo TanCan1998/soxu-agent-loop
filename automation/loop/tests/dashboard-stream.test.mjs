@@ -61,7 +61,7 @@ test("SSE requires token and streams only validated bounded event metadata",asyn
     const frames=[];
     session.res.setEncoding("utf8");
     session.res.on("data", chunk=>frames.push(chunk));
-    await coordinator.start("once");
+    await coordinator.start("start");
     const invalid={type:"soxu:activity",data:{taskId:1,role:"developer",state:"tool",tool:"token=secret",startedAt:"2026-10-27T00:00:00.000Z",activitySince:"2026-10-27T00:00:01.000Z",private:"secret"}};
     children[0].emit("message",invalid);
     coordinator.push("api_key=private-value","stderr");

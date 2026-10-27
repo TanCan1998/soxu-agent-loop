@@ -28,10 +28,9 @@ Commands:
   status       Show offline task status; add --json for machine-readable output
   models       Show Developer / Reviewer model routing
   seed-issues  Publish backlog tasks as GitHub Issues
-  once         Execute one eligible batch (up to the configured concurrency)
+  start        Recover paused/blocked tasks first, otherwise run the next batch
   loop         Run a bounded number of autonomous development rounds
   watch        Poll GitHub tasks (bounded by policy; no --local or --dry-run)
-  resume       Resume paused/interrupted tasks, or interpret a recovery sentence
   say          Execute a natural-language recovery instruction
   update       Fast-forward the tool checkout (hot update); add --check to only compare
   help         Show this help
@@ -126,14 +125,15 @@ async function once() {
   if (dryRun) { for (const issue of available.slice(0, p.maxConcurrentAgents)) console.log(`would run #${issue.number}: ${issue.title}`); return []; }
   return Promise.all(available.slice(0, p.maxConcurrentAgents).map(issue => processIssue(issue, { policy: p, local, signal: controller.signal })));
 }
-async function resume() {
-  const includeBlocked = args.includes("--blocked");
+/** One finite recovery batch: paused and blocked tasks are handled uniformly. */
+async function recover() {
+  const includeBlocked = true;
   const candidates = (await listPaused(undefined, { includeBlocked })).filter(s => local ? s.local : !s.local);
   if (!candidates.length) { console.log("No recoverable task; nothing to replay or bill."); return; }
   const select = args.find(x => /^#?\d+$/.test(x));
   const tasks = select ? candidates.filter(s => s.issue.number === Number(select.replace("#", ""))) : candidates;
   if (!tasks.length) throw new Error(`No saved task matches ${select}`);
-  if (dryRun) { for (const s of tasks) console.log(`would resume #${s.issue.number} at ${s.phase} (${s.reason ?? "interrupted"})`); return; }
+  if (dryRun) { for (const s of tasks) console.log(`would recover #${s.issue.number} at ${s.phase} (${s.status}: ${s.reason ?? "interrupted"})`); return; }
   // Safely preserve dirty edits and let Developer reconcile any main conflicts.
   // Never request paid Pi calls for unsafe/missing worktrees.
   const { eligible, blocked } = await prepareWorktreeRecovery(tasks);
@@ -142,13 +142,37 @@ async function resume() {
   for (let i = 0; i < eligible.length; i += p.maxConcurrentAgents) {
     const results = await Promise.all(eligible.slice(i, i + p.maxConcurrentAgents).map(s => processIssue(s.issue, { policy: p, local, resume: true, allowBlocked: includeBlocked, signal: controller.signal })));
     if (results.some(x => x.status === "paused" || x.status === "blocked")) {
-      console.log("Recovery paused/blocked again; no automatic API retry. Inspect the failure and resume explicitly when resolved.");
+      console.log("Recovery paused/blocked again; no automatic API retry. Inspect the failure and start again when resolved.");
       process.exitCode = 1;
       break;
     }
   }
 }
 const problematic = results => results.some(x => x.status === "paused" || x.status === "blocked");
+/**
+ * The single dashboard/CLI entry point: recover first, otherwise run the next
+ * batch. Both paths stay in one subprocess so two runners never race worktrees.
+ */
+async function start() {
+  const candidates = (await listPaused(undefined, { includeBlocked: true })).filter(s => local ? s.local : !s.local);
+  if (dryRun) {
+    if (candidates.length) { await recover(); return; }
+    const available = await issues();
+    if (!available.length) { console.log("No recoverable or eligible task; nothing would run."); return; }
+    for (const issue of available.slice(0, p.maxConcurrentAgents)) console.log(`would run #${issue.number}: ${issue.title}`);
+    return;
+  }
+  if (candidates.length) {
+    if (!local) await cleanup();
+    await recover();
+    if (!local) await cleanup();
+    return;
+  }
+  const results = await once();
+  if (!results.length && !dryRun) console.log("No recoverable or eligible task; nothing to do.");
+  if (!local) { await cleanup(); if (!problematic(results)) await processAuthorizedReleases(p); }
+  if (problematic(results)) process.exitCode = 1;
+}
 switch (command) {
   case "cleanup": { if(local || dryRun) throw new Error("cleanup requires GitHub mode"); const results=await cleanup(); console.log(`Merged cleanup: ${results.filter(x=>x.status==="cleaned").length} cleaned, ${results.filter(x=>x.status==="preserved").length} preserved, ${results.filter(x=>["error","invalid-checkpoint"].includes(x.status)).length} errors; unmerged or locked tasks are retained.`); if(results.some(x=>["error","invalid-checkpoint"].includes(x.status))) process.exitCode=1; break; }
   case "doctor": await doctor(); break;
@@ -195,31 +219,13 @@ switch (command) {
     break;
   }
   case "seed-issues": await seedIssues(); break;
-  case "resume": {
-    if (!local && !dryRun) await cleanup();
-    const sentence = naturalSentence().replace(/(?:^|\s)--blocked(?=\s|$)/g, " ").trim();
-    // Preserve legacy `--issue 123` and `resume` (all paused GitHub tasks).
-    if (args.includes("--blocked") && sentence && !/^(?:--issue\s+)?#?\d+$/.test(sentence)) throw new Error("--blocked is supported only for explicit resume, not natural language");
-    if (sentence && !/^(?:--issue\s+)?#?\d+$/.test(sentence)) {
-      const results = await recoverFromSentence(sentence, { policy: p, localOnly: local, githubOnly, dryRun, signal: controller.signal });
-      if (problematic(results)) process.exitCode = 1;
-    } else await resume();
-    if (!local && !dryRun) await cleanup();
-    break;
-  }
+  case "start": await start(); break;
   case "say": {
     const sentence = naturalSentence();
     if (!sentence) throw new Error('请提供一句话，例如：pnpm agent:say -- "继续 SOXU"');
     const results = await recoverFromSentence(sentence, { policy: p, localOnly: local, githubOnly, dryRun, signal: controller.signal });
     if (problematic(results)) process.exitCode = 1;
     if (!local && !dryRun) await cleanup();
-    break;
-  }
-  case "once": {
-    const results = await once();
-    if (!local && !dryRun) await cleanup();
-    if (!local && !dryRun && !problematic(results)) await processAuthorizedReleases(p);
-    if (problematic(results)) process.exitCode = 1;
     break;
   }
   case "watch": {
@@ -263,7 +269,7 @@ switch (command) {
     }
     break;
   }
-  default: throw new Error(`Unknown command '${command}', expected doctor|status|models|seed-issues|once|loop|watch|resume|say|update`);
+  default: throw new Error(`Unknown command '${command}', expected doctor|status|models|seed-issues|start|loop|watch|say|update`);
 }
 
 // A dashboard-restarted runner must be discoverable, so record identity and a durable
