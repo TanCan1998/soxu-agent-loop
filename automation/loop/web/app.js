@@ -176,7 +176,7 @@ function mountScrollIndicator(scroller = null) {
     const height = Math.max(28, Math.round(track * view / total));
     const offset = Math.round((track - height) * (top / (total - view)));
     bar.style.height = height + "px";
-    bar.style.left = (rect.right - 10) + "px";
+    bar.style.left = (rect.right - 14) + "px";
     bar.style.top = (rect.top + 4 + offset) + "px";
     bar.classList.add("visible", "active");
     clearTimeout(hideTimer);
@@ -192,6 +192,8 @@ function mountScrollIndicators() {
   try {
     // 经典滚动条环境（桌面 Chrome/Edge）由 ::-webkit-scrollbar 负责，不重复画。
     if (window.innerWidth - document.documentElement.clientWidth > 0) return;
+    // overlay 滚动条环境：原生滚动条会浮在自绘指示条之上，先把它彻底隐藏。
+    document.documentElement.classList.add("overlay-scroll");
     mountScrollIndicator(null);
     for (const node of document.querySelectorAll(".model-groups")) mountScrollIndicator(node);
   } catch { /* 受限环境（无布局/测试桩）跳过，不影响页面逻辑 */ }
