@@ -54,5 +54,13 @@ export async function policy() {
   if (t.piHardMinutes * 60 <= t.piStartupSeconds || t.piHardMinutes * 60 <= t.piIdleSeconds) throw new Error("Hard timeout must exceed startup/idle timeout");
   if (value.recovery?.automaticApiRetries !== 0 || !value.recovery?.preserveWorktree || !value.recovery?.manualOnQuota || !value.recovery?.manualOnNetwork) throw new Error("Bootstrap recovery policy requires no automatic API retries and preserved worktrees");
   if (value.releaseChannel !== "prerelease") throw new Error("Only prerelease is permitted in bootstrap");
+  // main is release-only; agents integrate into a separate branch.
+  const branchName = /^[A-Za-z0-9._/-]{1,80}$/;
+  for (const name of ["integrationBranch", "releaseBranch"]) {
+    if (value[name] !== undefined && (typeof value[name] !== "string" || !branchName.test(value[name]))) throw new Error(`Invalid policy: ${name}`);
+  }
+  // Only enforced when the project opts into a separate integration branch.
+  if (value.integrationBranch !== undefined && value.integrationBranch === value.releaseBranch)
+    throw new Error("integrationBranch must differ from releaseBranch");
   return value;
 }

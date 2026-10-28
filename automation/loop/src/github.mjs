@@ -41,12 +41,12 @@ export async function commentIssue(n, message) {
   try { const p = join(dir, "comment.md"); await writeFile(p, message); await gh(["issue", "comment", String(n), "--body-file", p], ROOT); }
   finally { await rm(dir, { recursive: true, force: true }); }
 }
-export async function createPr(n, branch, summary) {
+export async function createPr(n, branch, summary, base = "main") {
   const dir = await mkdtemp(join(tmpdir(), "soxu-"));
   try {
     const p = join(dir, "body.md");
     await writeFile(p, `Autonomous SOXU change for #${n}.\n\n${summary}\n\nCloses #${n}\n`);
-    return await gh(["pr", "create", "--base", "main", "--head", branch, "--title", `[agent] ${branch}`, "--body-file", p], ROOT);
+    return await gh(["pr", "create", "--base", base, "--head", branch, "--title", `[agent] ${branch}`, "--body-file", p], ROOT);
   } finally { await rm(dir, { recursive: true, force: true }); }
 }
 export async function branchProtectionEnabled() {

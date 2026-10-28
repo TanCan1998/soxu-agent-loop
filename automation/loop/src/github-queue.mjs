@@ -7,10 +7,10 @@ function labelsOf(issue) { return new Set((issue.labels ?? []).map(x => x.name))
  * with a `Closes #n` closing reference has actually merged. Manual Issue closure
  * and merely created PRs cannot unlock dependent tasks.
  */
-export function mergedIssueNumbers(prs) {
+export function mergedIssueNumbers(prs, base = "main") {
   const found = new Set();
   for (const pr of prs) {
-    if (pr.baseRefName !== "main" || !pr.mergedAt) continue;
+    if (pr.baseRefName !== base || !pr.mergedAt) continue;
     const regex = /(?:^|\n)\s*(?:closes|closed|close|fixes|fixed|fix|resolves|resolved|resolve)\s+#(\d+)\b/gim;
     for (const m of String(pr.body ?? "").matchAll(regex)) found.add(Number(m[1]));
   }
