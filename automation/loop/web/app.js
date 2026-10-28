@@ -872,14 +872,42 @@ let themeSwitchTimer = null;
 function setTheme(theme) {
   const root = document.documentElement;
   const changed = Boolean(root.dataset.theme) && root.dataset.theme !== theme;
-  // 只用 CSS 过渡：View Transitions 会对整页做快照，和 top-layer 弹窗、实时数据刷新
-  // 冲突，出现过主题切换不生效、弹窗被快照层遮住的问题。
-  if (changed) {
-    root.classList?.add("theme-switching");
-    clearTimeout(themeSwitchTimer);
-    themeSwitchTimer = setTimeout(() => root.classList?.remove("theme-switching"), 640);
+  const apply = () => { root.dataset.theme = theme; };
+  if (!changed) { apply(); themeLabelAndSave(theme); return; }
+  const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+  // View Transitions：从主题按钮位置圆形扩散。转场会对整页做快照，top-layer 弹窗
+  // 不在快照内会出现遮挡，所以切换前先立即关闭所有打开的弹窗（不播退场动画）。
+  if (!reduce && typeof document.startViewTransition === "function") {
+    for (const dialog of document.querySelectorAll("dialog[open]")) {
+      try { dialog.getAnimations?.().forEach(item => item.cancel()); } catch {}
+      delete dialog.dataset.closing;
+      dialog.classList.remove("closing");
+      try { dialog.close(); } catch {}
+    }
+    const button = $("themeToggle");
+    const rect = button?.getBoundingClientRect?.();
+    const x = rect ? rect.left + rect.width / 2 : window.innerWidth / 2;
+    const y = rect ? rect.top + rect.height / 2 : 0;
+    const radius = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
+    let settled = false;
+    const cleanup = () => { if (settled) return; settled = true; };
+    const transition = document.startViewTransition(apply);
+    const guard = setTimeout(cleanup, 900);
+    transition.ready.then(() => {
+      clearTimeout(guard);
+      return document.documentElement.animate(
+        { clipPath: ["circle(0px at " + x + "px " + y + "px)", "circle(" + radius + "px at " + x + "px " + y + "px)"] },
+        { duration: 560, easing: "cubic-bezier(.22,.61,.36,1)", pseudoElement: "::view-transition-new(root)" },
+      ).finished;
+    }).then(() => { cleanup(); }, () => { cleanup(); }).catch(() => { cleanup(); });
+    themeLabelAndSave(theme);
+    return;
   }
-  root.dataset.theme = theme;
+  // 不支持 View Transitions（旧内核/减少动效）：全站颜色柔和过渡。
+  root.classList?.add("theme-switching");
+  clearTimeout(themeSwitchTimer);
+  themeSwitchTimer = setTimeout(() => root.classList?.remove("theme-switching"), 640);
+  apply();
   themeLabelAndSave(theme);
 }
 function themeLabelAndSave(theme) {
