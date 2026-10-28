@@ -46,7 +46,10 @@ export async function createPr(n, branch, summary, base = "main") {
   try {
     const p = join(dir, "body.md");
     await writeFile(p, `Autonomous SOXU change for #${n}.\n\n${summary}\n\nCloses #${n}\n`);
-    return await gh(["pr", "create", "--base", base, "--head", branch, "--title", `[agent] ${branch}`, "--body-file", p], ROOT);
+    // PR 标题会成为合并提交的首行，必须符合同一套 <gitmoji> type(scope): 描述 规范，
+  // 否则目标仓库的 commit policy 会在 dev/main 上判定失败。
+  const title = `✨ feat(agent): resolve Issue #${n}`;
+  return await gh(["pr", "create", "--base", base, "--head", branch, "--title", title, "--body-file", p], ROOT);
   } finally { await rm(dir, { recursive: true, force: true }); }
 }
 export async function branchProtectionEnabled(branch = "main") {
