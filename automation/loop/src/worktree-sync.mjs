@@ -43,7 +43,7 @@ async function lockState(path) {
   }
 }
 
-async function inspect(root, state) {
+async function inspect(root, state, base = "main") {
   const info = {
     issue: state.issue.number, local: Boolean(state.local), phase: state.phase,
     status: state.status, branch: state.branch ?? null, directory: state.directory ?? null,
@@ -72,7 +72,7 @@ async function inspect(root, state) {
     }
     info.lock = await lockState(taskLock(root, state));
     info.dirty = Boolean(await git(["status", "--porcelain", "--untracked-files=all"], state.directory));
-    const counts = await git(["rev-list", "--left-right", "--count", "HEAD...origin/main"], state.directory);
+    const counts = await git(["rev-list", "--left-right", "--count", "HEAD...origin/" + base], state.directory);
     [info.ahead, info.behind] = counts.split(/\s+/).map(Number);
     const head = await git(["rev-parse", "HEAD"], state.directory);
     const intent = state.syncPending;
@@ -170,8 +170,8 @@ async function reconcileDirty(state, dir, wt, target) {
  * then re-applied on latest main. Conflicts are delegated to the Pi Developer;
  * both stash backup and checkpoint survive interruption.
  */
-export async function inspectWorktrees({ root = ROOT, sync = false, issueNumbers = null } = {}) {
-  if (sync) await git(["fetch", "origin", "main"], root);
+export async function inspectWorktrees({ root = ROOT, sync = false, issueNumbers = null, base = "main" } = {}) {
+  if (sync) await git(["fetch", "origin", base], root);
   const entries = (await loadStates(root)).filter(({state}) => !issueNumbers || issueNumbers.some(item =>
     item.id === state.issue.number && item.local === Boolean(state.local)));
   const output = [];
@@ -195,7 +195,7 @@ export async function inspectWorktrees({ root = ROOT, sync = false, issueNumbers
     try {
       const wt = state.directory;
       const currentHead = await git(["rev-parse", "HEAD"], wt);
-      const to = await git(["rev-parse", "origin/main"], wt);
+      const to = await git(["rev-parse", "origin/" + base], wt);
       const dirty = Boolean(await git(["status", "--porcelain", "--untracked-files=all"], wt));
       if (!state.syncPending && state.base && state.base !== currentHead)
         throw new Error("checkpoint-base-mismatch");
@@ -231,6 +231,7 @@ export async function inspectWorktrees({ root = ROOT, sync = false, issueNumbers
 export async function prepareWorktreeRecovery(states, options = {}) {
   if (!states.length) return { eligible: [], blocked: [], rows: [] };
   const rows = await inspectWorktrees({
+    base: options.base ?? "main",
     ...options, sync: true,
     issueNumbers: states.map(s => ({ id: s.issue.number, local: Boolean(s.local) })),
   });

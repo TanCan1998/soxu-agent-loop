@@ -39,6 +39,13 @@ export function dataRoot(root = ROOT) {
   if (binding.version !== 1 || !matches) throw new Error("External data directory belongs to a different project");
   return directory;
 }
+/**
+ * Branch agents integrate into. main stays release-only, so this is the branch PRs
+ * target, worktrees fast-forward from, and "already merged" checks compare against.
+ */
+export async function integrationBase() {
+  return (await policy()).integrationBranch ?? "main";
+}
 export async function policy() {
   const value = JSON.parse(await readFile(resolve(ROOT, "automation/policy.json"), "utf8"));
   for (const name of ["maxConcurrentAgents", "maxRoundsPerInvocation", "maxRetries", "maxChangedFiles", "maxChangedBytes"]) {

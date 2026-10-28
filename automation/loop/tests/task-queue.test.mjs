@@ -12,6 +12,16 @@ import {git} from '../src/process.mjs';
 const markdown = (id, priority = 'P0', dependencies = []) => `---\nid: ${id}\npriority: ${priority}\ndependencies: [${dependencies.join(', ')}]\n---\n\n# Title ${id}\n`;
 const doc = (id,priority,deps) => parseTaskDocument(`${id}.md`,markdown(id,priority,deps));
 
+test('merged detection follows the configured integration branch', () => {
+  const prs = [
+    { number: 1, baseRefName: "dev", mergedAt: "2026-10-28T00:00:00Z", body: "Closes #11" },
+    { number: 2, baseRefName: "main", mergedAt: "2026-10-28T00:00:00Z", body: "Closes #12" },
+  ];
+  assert.deepEqual([...mergedIssueNumbers(prs, "dev")], [11]);
+  assert.deepEqual([...mergedIssueNumbers(prs, "main")], [12]);
+  assert.deepEqual([...mergedIssueNumbers(prs)], [12], "default stays main for compatibility");
+});
+
 test('an absent backlog or done directory is an empty catalog, not an error', async () => {
   const root = await mkdtemp(join(tmpdir(), 'soxu-catalog-'));
   try {

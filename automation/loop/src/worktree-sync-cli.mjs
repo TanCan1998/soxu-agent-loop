@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { inspectWorktrees } from "./worktree-sync.mjs";
+import { integrationBase } from "./config.mjs";
 
 const args = process.argv.slice(2).filter(x => x !== "--");
 if (args.some(x => x !== "--sync" && x !== "--json"))
   throw new Error("Usage: pnpm agent:worktrees [-- --sync] [-- --json]");
 const sync = args.includes("--sync");
-const result = await inspectWorktrees({ sync });
+const result = await inspectWorktrees({ sync, base: await integrationBase() });
 if (args.includes("--json")) console.log(JSON.stringify(result, null, 2));
 else {
   console.log(sync ? "SOXU worktrees vs refreshed origin/main" : "SOXU worktrees vs local origin/main (use git fetch origin main first)");

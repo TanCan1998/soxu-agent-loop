@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { ROOT, policy as loadPolicy } from "./config.mjs";
+import { ROOT, policy as loadPolicy, integrationBase } from "./config.mjs";
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { run, git } from "./process.mjs";
@@ -109,7 +109,7 @@ async function verifyLockfiles() {
 }
 async function issues() {
   if (local) {
-    const {ready, waiting} = await getLocalTasks();
+    const {ready, waiting} = await getLocalTasks(undefined, await integrationBase());
     if (waiting.length) console.log(`Local prerequisites pending integration into main: ${waiting.map(t => `${t.id} <- ${t.missing.join(',')}`).join('; ')}`);
     return ready;
   }
@@ -129,7 +129,7 @@ async function doctor() {
   console.log("  policy:", JSON.stringify({ maxConcurrentAgents:p.maxConcurrentAgents, timeouts:p.timeouts, autoMerge:p.autoMerge, autoRelease:p.autoRelease }));
   console.log("  paused or interrupted tasks:", (await listPaused()).map(x => `#${x.issue.number} (${x.status}: ${x.phase})`).join(", ") || "none");
 }
-async function cleanup() { try { return await cleanupMergedTasks(ROOT,{signal:controller.signal}); } catch { console.warn("Merged cleanup unavailable; retry on the next run."); return [{status:"error"}]; } }
+async function cleanup() { try { return await cleanupMergedTasks(ROOT,{signal:controller.signal, base: await integrationBase()}); } catch { console.warn("Merged cleanup unavailable; retry on the next run."); return [{status:"error"}]; } }
 async function once() {
   if (!local && !dryRun) await cleanup();
   if (!dryRun) await verifyLockfiles();

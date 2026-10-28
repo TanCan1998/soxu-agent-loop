@@ -9,7 +9,7 @@ import { loadTaskCatalog, taskIdFromIssueTitle } from "./task-catalog.mjs";
 import { planGithubQueue, mergedIssueNumbers, waitingLabelDowngrades } from "./github-queue.mjs";
 
 const LABELS = ["agent:ready", "agent:waiting", "agent:in-progress", "agent:blocked", "agent:paused", "agent:pr", "agent:release"];
-export async function listIssues({promote = false} = {}) {
+export async function listIssues({promote = false, base = "main"} = {}) {
   // Both open and closed TASK issues are needed; a PR being created is NOT a merged dependency.
   const text = await gh(["issue", "list", "--state", "all", "--limit", "1000", "--json", "number,title,body,labels,state"], ROOT);
   const values = JSON.parse(text).filter(validIssue);
@@ -20,7 +20,7 @@ export async function listIssues({promote = false} = {}) {
   const merged = needsMergeEvidence
     ? JSON.parse(await gh(["pr", "list", "--state", "merged", "--limit", "1000", "--json", "body,baseRefName,mergedAt"], ROOT))
     : [];
-  const ready = planGithubQueue(values, catalog, mergedIssueNumbers(merged));
+  const ready = planGithubQueue(values, catalog, mergedIssueNumbers(merged, base));
   if (promote) {
     // A previously seeded v1.5 ready task may not have had dependency metadata honored.
     for (const issue of waitingLabelDowngrades(values, catalog, ready)) {
