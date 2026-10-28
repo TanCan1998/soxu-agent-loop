@@ -23,7 +23,7 @@ function response(status = 200) {
 function node() {
   const listeners = new Map(), children = [], attributes = {};
   const result = {
-    value: "", textContent: "", disabled: false, checked: false, dataset: {}, className: "", style: {}, replacements:0, setAttribute(name, value) { attributes[name] = String(value); }, getAttribute(name) { return attributes[name] ?? null; },
+    value: "", textContent: "", disabled: false, checked: false, dataset: {}, className: "", style: {}, replacements:0, setAttribute(name, value) { attributes[name] = String(value); }, removeAttribute(name) { delete attributes[name]; }, getAttribute(name) { return attributes[name] ?? null; }, closest(selector) { const m = selector.match(/^\\[data-tip\\]$/) ? "data-tip" : selector.startsWith(".") ? selector.slice(1) : null; let node = result; while (node) { if (m === "data-tip" && node.getAttribute && node.getAttribute("data-tip") !== null) return node; if (m && m !== "data-tip" && node.className === m) return node; node = node.parent; } return null; },
     scrollTop: 0, scrollHeight: 0, clientHeight: 100,
     classList: { add() {}, remove() {}, contains(value) { return result.className.split(" ").includes(value); } },
     showModal() {result.open=true;}, close() {result.open=false;},
@@ -35,7 +35,18 @@ function node() {
     get firstElementChild() { return children[0]; },
     replaceChildren(...items) { result.replacements++; children.splice(0,children.length,...items); for(const x of items) x.parent = result; },
     append(...items) { children.push(...items); for(const x of items) x.parent = result; },
+    prepend(...items) { children.unshift(...items); for(const x of items) x.parent = result; },
     querySelectorAll(selector) { const all=[];const visit=n=>{for(const c of n.children || []){if(selector==='fieldset' && c.tagName==='fieldset' || selector==='input:checked' && c.tagName==='input' && c.checked)all.push(c);visit(c);}};visit(result);return all; },
+    closest(selector) {
+      // 测试桩：沿 parent 向上找匹配 [data-tip] 的节点；真实浏览器由 Element.closest 提供。
+      const attr = /^\[([\w-]+)\]$/.exec(selector)?.[1];
+      let node = result;
+      while (node) {
+        if (attr ? node.attributes?.[attr] !== undefined : node.className === selector.replace(/^\./, "")) return node;
+        node = node.parent;
+      }
+      return null;
+    },
     querySelector(selector) { const find=n=>{for(const c of n.children || []){if(c.tagName===selector)return c;const hit=find(c);if(hit)return hit;}return null;};return find(result); },
     remove() { if (result.parent) { const i = result.parent.children.indexOf(result); if (i >= 0) result.parent.children.splice(i,1); } },
     appendChild(item) { result.append(item); return item; },
@@ -48,7 +59,7 @@ function page({ storage = new Map(), handler = () => response(), hidden = false,
     "milestoneDialog", "milestoneTitle", "milestoneDetails", "closeMilestone", "token", "tokenLabel", "authPanel", "authNotice", "connect", "notice", "connection", "dot", "globalRun", "running", "pending", "done",
     "total", "badge", "runner", "updated", "stop", "tasks", "logs", "refresh", "copyLogs", "intakeRunState", "productReports", "productCopy", "productDelete", "productClear", "qualityReports", "qualityCopy", "qualityDelete", "qualityClear",
     "navOverview", "navExecution", "navMonitor", "navRequirements", "navLanes", "navModels", "pageOverview", "pageExecution", "pageMonitor", "pageRequirements", "pageLanes", "pageModels", "modelSummary", "openModels", "closeModels", "reloadModels", "saveModels", "modelScope", "modelSearch", "modelInherit", "modelDialog", "modelGroups", "modelMessage", "logLimit", "logFilter", "followLogs", "logCount", "agentCards", "githubStatus", "autoMerge", "updateStatus", "updateTool", "taskFilters", "draftFilters", "milestoneFilters", "projectPhaseTasks",
-    "publishButton", "publishMenu", "publishPreview", "publishRelease", "publishHint",
+    "publishButton", "publishMenu", "publishPreview", "publishRelease", "publishHint", "tip", "restartOverlay",
     "confirmDialog", "confirmTitle", "confirmMessage", "confirmInputLabel", "confirmInput", "confirmAccept", "confirmCancel", "confirmCancelTop", "projectPhaseTitle", "projectPhaseDetail", "projectPhaseCount", "roadmapCards", "developmentLane", "productLane", "qualityLane", "lessonsStatus", "openProduct", "openQuality", "productDialog", "qualityDialog", "closeProduct", "closeQuality", "runProduct", "runQuality", "productRunState", "qualityRunState", "productReport", "qualityReport", "projectProgress", "projectProgressFill", "themeToggle", "openIntake", "intakeDialog", "intakeSummary", "queueList", "closeIntake", "requirement", "assessIntake", "intakeResult", "queueReady", "intakeMilestone", "submitIntake", "clearIntake", "draftList", "batchDrafts", "saveDraft", "saveAnswers", "requirementField", "assessingHint", "reassessIntake",
   ];
   const elements = Object.fromEntries(ids.map(id => [id, node()]));
@@ -508,7 +519,7 @@ test("milestone header lists active tasks, or upcoming ones when nothing is acti
   const chip = app.elements.projectPhaseTasks.children[1];
   assert.equal(chip.className, "phase-task-chip");
   assert.equal(chip.textContent, "实现网络重试策略与超时预算（很长很长的标题）");
-  assert.equal(chip.title, "#4 实现网络重试策略与超时预算（很长很长的标题）");
+  assert.equal(chip.getAttribute("data-tip"), "#4 实现网络重试策略与超时预算（很长很长的标题）");
   assert.equal(app.elements.projectPhaseTasks.children.length, 2, "only active tasks are chipped");
 
   const idle = { ...running, tasks:[{id:6,title:"待开始任务",status:"pending"}] };
@@ -716,14 +727,16 @@ test("the update button checks when current and applies when an update is availa
   app.elements.connect.dispatch("click");
   await tick();
   assert.match(app.elements.updateStatus.textContent, /有更新可用 · behind 2 · main → origin\/main/);
-  assert.match(app.elements.updateTool.title, /（可更新）/);
+  assert.match(app.elements.updateTool.getAttribute("data-tip"), /（可更新）/);
   app.elements.updateTool.dispatch("click");
   await tick();
   await tick();
   assert.deepEqual(app.requests.filter(request => request.path === "/api/update").map(request => JSON.parse(request.options.body).action), ["apply"]);
   assert.match(app.elements.updateStatus.textContent, /已更新到 22222222 · 控制台正在重启/);
-  assert.match(app.elements.updateTool.title, /（无需更新）/);
+  assert.match(app.elements.updateTool.getAttribute("data-tip"), /（无需更新）/);
   assert.equal(app.elements.updateTool.disabled, false);
+  // 热更新重启期间显示覆盖层。
+  assert.equal(app.elements.restartOverlay.hidden, false, "restart overlay shows while restarting");
 
   // Already current: the click only checks.
   const current = { ...STATUS, protocolVersion: 1, update: { status: "ok", available: false, behind: 0, comparison: "main → origin/main", toolVersion: "0.1.0" } };
@@ -733,7 +746,7 @@ test("the update button checks when current and applies when an update is availa
   view.elements.token.value = TOKEN;
   view.elements.connect.dispatch("click");
   await tick();
-  assert.match(view.elements.updateTool.title, /（无需更新）/);
+  assert.match(view.elements.updateTool.getAttribute("data-tip"), /（无需更新）/);
   view.elements.updateTool.dispatch("click");
   await tick();
   assert.deepEqual(view.requests.filter(request => request.path === "/api/update").map(request => JSON.parse(request.options.body).action), ["check"]);
@@ -749,6 +762,27 @@ test("the token survives a reload when sessionStorage was cleared (Android brows
   assert.equal(app.elements.authPanel.hidden, true, "auto-connects from localStorage");
   assert.equal(storage.get(TOKEN_STORAGE_KEY), TOKEN, "sessionStorage is re-seeded");
   assert.equal(preferences.get(TOKEN_STORAGE_KEY), TOKEN, "localStorage keeps the token across reloads");
+});
+
+test("clicking the update button shows a busy state and status text while checking", async () => {
+  const current = { ...STATUS, protocolVersion: 1, update: { status: "ok", available: false, behind: 0, comparison: "main → origin/main", toolVersion: "0.1.0" } };
+  let resolveCheck;
+  const view = page({ handler: path => {
+    if (path === "/api/status") return { ok: true, status: 200, json: async () => current };
+    return new Promise(resolve => { resolveCheck = () => resolve({ ok: true, status: 200, json: async () => ({ status: "ok", available: false, behind: 0, comparison: "main → origin/main", protocolVersion: 1 }) }); });
+  } });
+  view.elements.token.value = TOKEN;
+  view.elements.connect.dispatch("click");
+  await tick();
+  const pending = view.elements.updateTool.dispatch("click");
+  await tick();
+  assert.equal(view.elements.updateTool.disabled, true, "button is disabled while checking");
+  assert.match(view.elements.updateStatus.textContent, /正在检查/);
+  resolveCheck();
+  await pending;
+  await tick();
+  assert.equal(view.elements.updateTool.disabled, false, "button re-enables after the check");
+  assert.match(view.elements.updateStatus.textContent, /已是最新/);
 });
 
 test("the publish menu gates release on dev being merged into main", async () => {
@@ -781,6 +815,6 @@ test("the publish menu gates release on dev being merged into main", async () =>
   portable.elements.connect.dispatch("click");
   await tick();
   assert.equal(portable.elements.publishRelease.disabled, false, "release must not depend on local checkout state");
-  assert.match(portable.elements.publishRelease.title, /PR/);
+  assert.match(portable.elements.publishRelease.getAttribute("data-tip"), /PR/);
 });
 
