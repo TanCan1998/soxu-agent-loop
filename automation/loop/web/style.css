@@ -57,3 +57,18 @@ dialog{width:min(680px,calc(100vw - 30px));max-height:85vh;overflow:auto;border:
 .dependency-ids{margin:0 0 6px;font-family:ui-monospace,Consolas,monospace;color:var(--accent)}
 .dependency-list{margin:0;padding-left:20px}
 .dependency-list li{margin:2px 0;overflow-wrap:anywhere}
+
+/* 里程碑明细状态：六种状态各自可辨（颜色 + 图标） */
+.milestone-state{font-size:12px;white-space:nowrap}
+.milestone-state[data-state=merged]{color:#78d0ac}
+.milestone-state[data-state=unverified]{color:#e5c07b}
+.milestone-state[data-state=running]{color:#86c2ff}
+.milestone-state[data-state=paused]{color:#ffb86b}
+.milestone-state[data-state=blocked]{color:#ff7b72}
+.milestone-state[data-state=pending]{color:#a0a9ba}
+[data-theme="light"] .milestone-state[data-state=merged]{color:#1c7a54}
+[data-theme="light"] .milestone-state[data-state=unverified]{color:#8a6a12}
+[data-theme="light"] .milestone-state[data-state=running]{color:#205fbb}
+[data-theme="light"] .milestone-state[data-state=paused]{color:#a35a11}
+[data-theme="light"] .milestone-state[data-state=blocked]{color:#a33e20}
+[data-theme="light"] .milestone-state[data-state=pending]{color:#5a6472}
