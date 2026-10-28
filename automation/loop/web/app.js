@@ -163,15 +163,22 @@ function mountScrollIndicator(scroller = null) {
   bar.className = "scroll-thumb";
   document.body.appendChild(bar);
   let hideTimer = null;
-  const sync = () => {
-    // 指示条始终 fixed 定位：容器滚动时 rect 不变，滚动只改变 thumb 的偏移。
+  const scrollTarget = () => scroller ?? (document.scrollingElement || document.documentElement);
+  const metrics = () => {
     // 移动端 WebView 里 window.scrollY 常为 0，必须以 scrollingElement.scrollTop 为准。
     const root = document.scrollingElement || document.documentElement;
     const rect = scroller ? scroller.getBoundingClientRect() : { top: 0, right: window.innerWidth, height: root.clientHeight };
-    const top = scroller ? scroller.scrollTop : (root.scrollTop || window.scrollY || 0);
-    const view = scroller ? scroller.clientHeight : root.clientHeight;
-    const total = scroller ? scroller.scrollHeight : root.scrollHeight;
-    const visibleArea = scroller ? rect.height : view;
+    return {
+      rect,
+      top: scroller ? scroller.scrollTop : (root.scrollTop || window.scrollY || 0),
+      view: scroller ? scroller.clientHeight : root.clientHeight,
+      total: scroller ? scroller.scrollHeight : root.scrollHeight,
+      visibleArea: scroller ? rect.height : root.clientHeight,
+    };
+  };
+  const sync = () => {
+    // 指示条始终 fixed 定位：容器滚动时 rect 不变，滚动只改变 thumb 的偏移。
+    const { rect, top, view, total, visibleArea } = metrics();
     if (!Number.isFinite(view) || !Number.isFinite(total) || view <= 0) return;
     if (total <= view + 2 || visibleArea < 40) { bar.classList.remove("visible"); return; }
     const track = visibleArea - 8;
@@ -184,6 +191,50 @@ function mountScrollIndicator(scroller = null) {
     clearTimeout(hideTimer);
     hideTimer = setTimeout(() => bar.classList.remove("active"), 900);
   };
+  // 拖动滑块滚动页面：按位移比例映射到 scrollTop。
+  // 同时支持 Pointer / Mouse / Touch 三套事件：部分 WebView 与自动化环境
+  // 不会把鼠标事件合成为 pointer 事件，只用 pointerdown 会完全没反应。
+  let drag = null;
+  const beginDrag = (clientY, pointerId = null) => {
+    if (drag) return;
+    const { top, view, total, visibleArea } = metrics();
+    if (!(total > view + 2)) return;
+    const track = visibleArea - 8;
+    const height = Math.max(28, Math.round(track * view / total));
+    drag = {
+      pointerId,
+      startY: clientY,
+      startTop: top,
+      usable: Math.max(1, track - height),
+      maxScroll: Math.max(1, total - view),
+    };
+    if (pointerId !== null) { try { bar.setPointerCapture?.(pointerId); } catch { /* unsupported */ } }
+    bar.classList.add("dragging", "active");
+    clearTimeout(hideTimer);
+  };
+  const moveDrag = clientY => {
+    if (!drag) return;
+    const next = drag.startTop + ((clientY - drag.startY) / drag.usable) * drag.maxScroll;
+    scrollTarget().scrollTop = Math.max(0, Math.min(drag.maxScroll, Math.round(next)));
+  };
+  const endDrag = pointerId => {
+    if (!drag) return;
+    if (pointerId != null && drag.pointerId != null && pointerId !== drag.pointerId) return;
+    if (drag.pointerId != null) { try { bar.releasePointerCapture?.(drag.pointerId); } catch { /* unsupported */ } }
+    drag = null;
+    bar.classList.remove("dragging");
+  };
+  bar.addEventListener("pointerdown", event => { event.preventDefault?.(); beginDrag(event.clientY, event.pointerId); });
+  bar.addEventListener("pointermove", event => { if (event.pointerId !== drag?.pointerId) return; event.preventDefault?.(); moveDrag(event.clientY); });
+  bar.addEventListener("pointerup", event => endDrag(event.pointerId));
+  bar.addEventListener("pointercancel", event => endDrag(event.pointerId));
+  bar.addEventListener("mousedown", event => { if (drag) return; event.preventDefault?.(); beginDrag(event.clientY); });
+  window.addEventListener("mousemove", event => { if (drag) { event.preventDefault?.(); moveDrag(event.clientY); } });
+  window.addEventListener("mouseup", () => endDrag());
+  bar.addEventListener("touchstart", event => { if (drag) return; const t = event.touches?.[0]; if (t) { event.preventDefault?.(); beginDrag(t.clientY); } }, { passive: false });
+  window.addEventListener("touchmove", event => { if (!drag) return; const t = event.touches?.[0]; if (t) { event.preventDefault?.(); moveDrag(t.clientY); } }, { passive: false });
+  window.addEventListener("touchend", () => endDrag());
+  window.addEventListener("touchcancel", () => endDrag());
   if (scroller) {
     scroller.addEventListener("scroll", sync, { passive: true });
   } else {
