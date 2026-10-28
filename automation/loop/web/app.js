@@ -42,6 +42,43 @@ function forgetToken(token) {
   } catch {}
 }
 function notice(message) { $("notice").textContent = message; $("authNotice").textContent = message; }
+/**
+ * 统一确认弹窗：替代浏览器原生 await askConfirm()/await askText()，避免阻塞式弹窗与样式割裂。
+ * 返回 Promise，调用方必须 await。
+ */
+function showConfirmDialog({ message, input = null, confirmText = "确认", danger = false }) {
+  const dialog = $("confirmDialog");
+  $("confirmMessage").textContent = message;
+  $("confirmTitle").textContent = danger ? "确认高风险操作" : "确认操作";
+  $("confirmInputLabel").hidden = input === null;
+  $("confirmInput").hidden = input === null;
+  $("confirmInput").value = input?.value ?? "";
+  if (input) $("confirmInput").placeholder = input.placeholder ?? "";
+  $("confirmAccept").textContent = confirmText;
+  $("confirmAccept").className = danger ? "primary danger" : "primary";
+  return new Promise(resolve => {
+    const finish = value => {
+      dialog.close();
+      $("confirmAccept").removeEventListener("click", accept);
+      $("confirmCancel").removeEventListener("click", cancel);
+      $("confirmCancelTop").removeEventListener("click", cancel);
+      resolve(value);
+    };
+    const accept = () => finish(input === null ? true : $("confirmInput").value.trim());
+    const cancel = () => finish(input === null ? false : null);
+    $("confirmAccept").addEventListener("click", accept);
+    $("confirmCancel").addEventListener("click", cancel);
+    $("confirmCancelTop").addEventListener("click", cancel);
+    dialog.showModal();
+  });
+}
+function askConfirm(message, options = {}) {
+  return showConfirmDialog({ message, confirmText: options.confirmText ?? "确认", danger: options.danger === true });
+}
+function askText(message, placeholder = "") {
+  return showConfirmDialog({ message, input: { value: "", placeholder }, confirmText: "确定" });
+}
+
 function element(tag, value, className) {
   const result = document.createElement(tag);
   if (value !== undefined) result.textContent = String(value);
@@ -620,7 +657,7 @@ async function loadAdvisory(lane, selected=null) {
 async function deleteAdvisory(lane, all) {
   const name=all ? null : $(lane+"Reports").value;
   if(!all && !name) return;
-  if(!confirm(all ? "确认清空此轨道的本地报告？" : "确认删除当前本地报告？")) return;
+  if(!await askConfirm(all ? "确认清空此轨道的本地报告？" : "确认删除当前本地报告？")) return;
   try {await api("/api/advisory-delete",{method:"POST",body:{lane,name}});await loadAdvisory(lane);await refresh();}
   catch(error) {notice("删除报告失败："+error.message);}
 }
@@ -631,7 +668,7 @@ async function openAdvisory(lane) {
 }
 async function startAdvisory(lane) {
   if (!connected) return notice("先连接本地控制台。");
-  if (!confirm("即将启动一次只读模型分析，可能产生费用；失败不会自动重试。继续？")) return;
+  if (!await askConfirm("即将启动一次只读模型分析，可能产生费用；失败不会自动重试。继续？")) return;
   try {await api("/api/advisory-run",{method:"POST",body:{lane}});await refresh();}
   catch(error){$(lane+"RunState").textContent="分析启动失败："+error.message; }
 }
@@ -669,8 +706,8 @@ function draftQuestions(a) {
 /** One draft row; shared by the active list and the collapsed completed section. */
 function draftRow(d) {
   const row=element("div",undefined,"queue-item"), label=element("label"), box=element("input");box.type="checkbox";box.checked=selectedDrafts.has(d.id);box.disabled=d.status!=="review" || !Array.isArray(d.answers) || draftState.busy;box.addEventListener("change",()=>{if(box.checked)selectedDrafts.add(d.id);else selectedDrafts.delete(d.id);});label.append(box,document.createTextNode(" "+(d.assessment?.title || d.requirement.slice(0,60))+" · "+({draft:"草稿",review:d.answers?"可提交":"待确认",assessing:"评估中",submitting:"提交中",submitted:"已提交",unknown:"结果待核实"}[d.status]||d.status)));row.append(label);
-  for(const [text,action,disabled] of [["编辑",()=>openDraft(d),["unknown","submitted","submitting"].includes(d.status)],["上移",()=>draftAction("move",{id:d.id,direction:-1}),false],["下移",()=>draftAction("move",{id:d.id,direction:1}),false],["删除",()=>{if(confirm("删除这个草稿？"))void draftAction("remove",{id:d.id});},d.status==="unknown"]]){const b=element("button",text);b.disabled=disabled||draftState.busy;b.addEventListener("click",action);row.append(b);}
-  if(d.status==="unknown"){const b=element("button","核实结果");b.disabled=draftState.busy;b.addEventListener("click",async()=>{const created=confirm("请先在 GitHub 检查。确定已创建选择‘确定’；确认未创建选择‘取消’。");if(created){const url=prompt("输入已创建的 GitHub Issue 链接：");if(!url)return;await draftAction("resolve",{id:d.id,created:true,url});}else if(confirm("确认 GitHub 中没有创建该需求，允许重新提交？"))await draftAction("resolve",{id:d.id,created:false,url:null});});row.append(b);}
+  for(const [text,action,disabled] of [["编辑",()=>openDraft(d),["unknown","submitted","submitting"].includes(d.status)],["上移",()=>draftAction("move",{id:d.id,direction:-1}),false],["下移",()=>draftAction("move",{id:d.id,direction:1}),false],["删除",async()=>{if(await askConfirm("删除这个草稿？"))void draftAction("remove",{id:d.id});},d.status==="unknown"]]){const b=element("button",text);b.disabled=disabled||draftState.busy;b.addEventListener("click",action);row.append(b);}
+  if(d.status==="unknown"){const b=element("button","核实结果");b.disabled=draftState.busy;b.addEventListener("click",async()=>{const created=await askConfirm("请先在 GitHub 检查。确定已创建选择‘确定’；确认未创建选择‘取消’。");if(created){const url=await askText("输入已创建的 GitHub Issue 链接：");if(!url)return;await draftAction("resolve",{id:d.id,created:true,url});}else if(await askConfirm("确认 GitHub 中没有创建该需求，允许重新提交？"))await draftAction("resolve",{id:d.id,created:false,url:null});});row.append(b);}
   if(d.status==="submitted" && /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/.test(d.url || "")){const a=element("a","查看 Issue");a.href=d.url;a.target="_blank";a.rel="noopener noreferrer";row.append(a);}
   return row;
 }
@@ -679,7 +716,7 @@ function renderDrafts(data, legacy = null) {
   const items=draftState.items || []; const list=$("draftList");
   const key=JSON.stringify(draftState)+JSON.stringify([...selectedDrafts])+JSON.stringify(legacy)+listFilters.drafts;
   if(key!==lastDraftKey){lastDraftKey=key;list.replaceChildren();
-    if(legacy?.status === "unknown"){const row=element("div",undefined,"queue-item");row.append(element("span","旧版提交结果待核实：请先检查 GitHub。"));const b=element("button","已核实，解除旧锁定");b.addEventListener("click",async()=>{if(confirm("确认已检查 GitHub 中是否创建该需求？")){try{await api("/api/intake-clear",{method:"POST",body:{id:legacy.id}});await refresh();}catch(e){notice("解除锁定失败："+e.message);}}});row.append(b);list.append(row);}
+    if(legacy?.status === "unknown"){const row=element("div",undefined,"queue-item");row.append(element("span","旧版提交结果待核实：请先检查 GitHub。"));const b=element("button","已核实，解除旧锁定");b.addEventListener("click",async()=>{if(await askConfirm("确认已检查 GitHub 中是否创建该需求？")){try{await api("/api/intake-clear",{method:"POST",body:{id:legacy.id}});await refresh();}catch(e){notice("解除锁定失败："+e.message);}}});row.append(b);list.append(row);}
     const activeItems=items.filter(x=>!draftDone(x));
     const completed=items.filter(draftDone);
     renderFilterBar("draftFilters","drafts",()=>{lastDraftKey="";renderDrafts(draftState,legacy);},{all:items.length,active:activeItems.length,done:completed.length});
@@ -741,7 +778,7 @@ function collectAnswers(){return [...$("intakeResult").querySelectorAll("fieldse
 async function saveDraftAnswers(){const result=await draftAction("answer",{id:editingDraft,answers:collectAnswers(),ready:$("queueReady").checked,milestone:$("intakeMilestone").value||null});return result;}
 async function mergePr(issue, pr) {
   if (!connected || !Number.isSafeInteger(issue) || !Number.isSafeInteger(pr.number)) return;
-  if (!confirm(`合并 PR #${pr.number}「${pr.title}」并删除远程分支？将重新检查 PR、CI 和分支头。`)) return;
+  if (!await askConfirm(`合并 PR #${pr.number}「${pr.title}」并删除远程分支？将重新检查 PR、CI 和分支头。`)) return;
   try {
     const result = await api("/api/merge", {method:"POST", body:{issue,pr:pr.number}});
     notice(result.branchDeleted ? `PR #${pr.number} 已合并，远程分支已删除。` : `PR #${pr.number} 已合并，但远程分支删除失败：${result.branch || "请检查"}`);
@@ -750,9 +787,9 @@ async function mergePr(issue, pr) {
 }
 async function execute(command) {
   if (!connected) return notice("先连接本地控制台。");
-  if (command === "start" && !confirm("启动会先恢复可恢复的暂停/阻塞任务，没有可恢复任务时执行下一批；两者都可能调用模型并产生费用。继续？")) return;
-  if (command === "loop" && !confirm("启动循环会连续执行多轮 Agent 任务并产生模型费用。确认？")) return;
-  if (command === "watch" && !confirm("启动监控可重复执行 Agent 任务并产生模型费用。确认启用受策略限制的监控？")) return;
+  if (command === "start" && !await askConfirm("启动会先恢复可恢复的暂停/阻塞任务，没有可恢复任务时执行下一批；两者都可能调用模型并产生费用。继续？")) return;
+  if (command === "loop" && !await askConfirm("启动循环会连续执行多轮 Agent 任务并产生模型费用。确认？")) return;
+  if (command === "watch" && !await askConfirm("启动监控可重复执行 Agent 任务并产生模型费用。确认启用受策略限制的监控？")) return;
   try {
     const result = await api("/api/run", { method:"POST", body:{ command } });
     notice("已接受：" + result.command + "。停止仅作用于此控制台启动的任务。");
@@ -813,7 +850,7 @@ async function updateFromGithub() {
   }
 }
 async function applyToolUpdate(check) {
-  if (!confirm("更新到 " + (check.behind ?? 1) + " 个新提交并重启控制台？正在运行的任务不会被中断（新控制台会自动接管），冒烟失败会自动回滚。")) return;
+  if (!await askConfirm("更新到 " + (check.behind ?? 1) + " 个新提交并重启控制台？正在运行的任务不会被中断（新控制台会自动接管），冒烟失败会自动回滚。")) return;
   const result = await api("/api/update", { method: "POST", body: { action: "apply" } });
   if (result.status === "updated" || result.status === "up-to-date") lastUpdate = { ...check, available: false, behind: 0 };
   $("updateStatus").textContent = updateText(result, result.protocolVersion);
@@ -897,7 +934,7 @@ $("modelInherit").addEventListener("change",()=>{const scope=$("modelScope").val
 $("saveModels").addEventListener("click",async()=>{
   if (!modelDraft) return;
   if (Object.values(modelDraft.roles).some(x=>Array.isArray(x) && x.length===0)) {$("modelMessage").textContent="角色自定义配置至少选一个模型，或选择继承。";return;}
-  if (!confirm("保存后立即对接下来启动的任务生效（可能改变模型费用）。正在运行的任务保持原模型；手动安全停止后再启动会使用新配置。确定？"))return;
+  if (!await askConfirm("保存后立即对接下来启动的任务生效（可能改变模型费用）。正在运行的任务保持原模型；手动安全停止后再启动会使用新配置。确定？"))return;
   try {const result=await api("/api/model-settings",{method:"POST",body:modelDraft});modelSettings=result.settings;$("modelDialog").close();notice("模型配置已保存：正在运行的任务不受影响，下次启动（含安全停止后重启）使用新配置。");await refresh();}
   catch(error){$("modelMessage").textContent="保存失败："+error.message;}
 });
@@ -916,17 +953,17 @@ $("themeToggle").addEventListener("click", () => setTheme(document.documentEleme
 $("openIntake").addEventListener("click",()=>{if(!connected)return notice("先连接本地控制台。");openDraft(null);});
 $("closeIntake").addEventListener("click",()=>$("intakeDialog").close());
 $("saveDraft").addEventListener("click",async()=>{if(await saveDraft()){$("intakeDialog").close();notice("草稿已保存。");}});
-$("assessIntake").addEventListener("click",async()=>{if(!confirm("评估会调用一次模型并可能产生费用，继续？"))return;const d=draftState.items.find(x=>x.id===editingDraft);if(!d||d.requirement!==$("requirement").value.trim()){if(!await saveDraft())return;}await draftAction("assess",{id:editingDraft});});
+$("assessIntake").addEventListener("click",async()=>{if(!await askConfirm("评估会调用一次模型并可能产生费用，继续？"))return;const d=draftState.items.find(x=>x.id===editingDraft);if(!d||d.requirement!==$("requirement").value.trim()){if(!await saveDraft())return;}await draftAction("assess",{id:editingDraft});});
 $("saveAnswers").addEventListener("click",async()=>{if(await saveDraftAnswers())notice("确认结果已保存。");});
 $("reassessIntake").addEventListener("click",async()=>{
   if(!connected)return notice("先连接本地控制台。");
   if(!editingDraft)return notice("请先选择草稿。");
-  if(!confirm("将按已填写的待确认项重新评估可行性与实施安排，会产生一次模型调用。继续？"))return;
+  if(!await askConfirm("将按已填写的待确认项重新评估可行性与实施安排，会产生一次模型调用。继续？"))return;
   const result=await draftAction("reassess",{id:editingDraft});
   if(result)notice("已提交重新评估；结果更新后会替换当前评估内容。");
 });
-$("submitIntake").addEventListener("click",async()=>{if(!confirm("确认提交该需求？"))return;if(!await saveDraftAnswers())return;await draftAction("batch",{ids:[editingDraft]});});
-$("batchDrafts").addEventListener("click",async()=>{const ids=[...selectedDrafts];if(!ids.length)return notice("请先选择已完成确认的草稿。");if(!confirm(`确认按队列顺序提交 ${ids.length} 项需求？`))return;const result=await draftAction("batch",{ids});if(result){selectedDrafts.clear();lastDraftKey="";renderDrafts(result);}});
+$("submitIntake").addEventListener("click",async()=>{if(!await askConfirm("确认提交该需求？"))return;if(!await saveDraftAnswers())return;await draftAction("batch",{ids:[editingDraft]});});
+$("batchDrafts").addEventListener("click",async()=>{const ids=[...selectedDrafts];if(!ids.length)return notice("请先选择已完成确认的草稿。");if(!await askConfirm(`确认按队列顺序提交 ${ids.length} 项需求？`))return;const result=await draftAction("batch",{ids});if(result){selectedDrafts.clear();lastDraftKey="";renderDrafts(result);}});
 (function initializePreferences() {
   showPage(stored(preferenceStorage,PAGE_KEY) || "Overview");
   const theme = stored(preferenceStorage,THEME_KEY);
@@ -972,12 +1009,12 @@ for (const button of document.querySelectorAll("[data-command]"))
   button.addEventListener("click", () => void execute(button.dataset.command));
 $("autoMerge").addEventListener("click", async () => {
   const enabled = $("autoMerge").dataset.enabled !== "true";
-  if (enabled && !confirm("开启后，本次控制台后续启动的任务会在仓库分支保护允许时请求自动合并。关闭或重启控制台不会撤销已提交给 GitHub 的自动合并请求。继续？")) return;
+  if (enabled && !await askConfirm("开启后，本次控制台后续启动的任务会在仓库分支保护允许时请求自动合并。关闭或重启控制台不会撤销已提交给 GitHub 的自动合并请求。继续？")) return;
   try { await api("/api/auto-merge", {method:"POST", body:{enabled}}); await refresh(); }
   catch (error) { notice("设置失败：" + error.message); }
 });
 $("stop").addEventListener("click", async () => {
-  if (!confirm("请求优雅停止当前调度；工作树和检查点将保留。确定吗？")) return;
+  if (!await askConfirm("请求优雅停止当前调度；工作树和检查点将保留。确定吗？")) return;
   try {
     await api("/api/stop", { method:"POST", body:{} });
     notice("已发送停止信号，等待当前 Runner 退出。");
