@@ -730,8 +730,18 @@ export function createDashboardServer({ root = ROOT, token, bindHost = "127.0.0.
           if (!body || Object.keys(body).join(",") !== "lane" || typeof body.lane !== "string") return reply(400,{error:"invalid-body"});
           return reply(202, coordinator.advisory.start(body.lane));
         }
-        if (request.url === "/api/queue-reorder" && keys === "order") return reply(200, await coordinator.reorderQueue(body.order));
-        if (request.url === "/api/queue-ready" && keys === "number,ready") return reply(200, await coordinator.setQueueReady(body.number, body.ready === true));
+        // 注意：keys 在下面的 drafts 分支里才声明，这里必须自己算，否则会抛
+        // ReferenceError 并被兜底成 503 operation-failed。
+        if (request.url === "/api/queue-reorder") {
+          if (!body || typeof body !== "object" || Array.isArray(body)) return reply(400, { error: "invalid-body" });
+          if (Object.keys(body).sort().join(",") !== "order" || !Array.isArray(body.order)) return reply(400, { error: "invalid-body" });
+          return reply(200, await coordinator.reorderQueue(body.order));
+        }
+        if (request.url === "/api/queue-ready") {
+          if (!body || typeof body !== "object" || Array.isArray(body)) return reply(400, { error: "invalid-body" });
+          if (Object.keys(body).sort().join(",") !== "number,ready") return reply(400, { error: "invalid-body" });
+          return reply(200, await coordinator.setQueueReady(body.number, body.ready === true));
+        }
         if (request.url.startsWith("/api/drafts-")) {
           if (!body || typeof body!=="object" || Array.isArray(body)) return reply(400,{error:"invalid-body"});
           const keys=Object.keys(body).sort().join(","); let result;
