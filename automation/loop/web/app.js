@@ -20,6 +20,8 @@ let instanceId = null, latestSequence = 0, logs = [], lastTaskKey = "", rendered
 let agents = new Map(), lastAgentKey = "", streamController = null, streamToken = null, reconnectTimer = null, retries = 0;
 let logLimit = 50, logFilter = "all", followLogs = true, currentIntake = null, lastIntakeKey = "", lastQueueKey = "";
 let lastRoadmapKey = "";
+let queueSnapshot = []; // 已创建需求（供分类计数复用）
+let lastStatus = null;  // 最近一次快照，供分类切换时局部重绘
 let advisoryState = null, loadedReportKeys = {product:"",quality:""}, currentReports = {product:null,quality:null};
 let draftState = {items:[],busy:false}, editingDraft = null, selectedDrafts = new Set(), lastDraftKey = "";
 let modelSettings = null, modelDraft = null, modelCatalog = [], actualModels = new Map();
@@ -72,7 +74,7 @@ function showConfirmDialog({ message, input = null, confirmText = "确认", dang
   $("confirmAccept").className = danger ? "primary danger" : "primary";
   return new Promise(resolve => {
     const finish = value => {
-      dialog.close();
+      closeDialog(dialog);
       $("confirmAccept").removeEventListener("click", accept);
       $("confirmCancel").removeEventListener("click", cancel);
       dialog.removeEventListener("click", backdrop);
@@ -92,6 +94,29 @@ function showConfirmDialog({ message, input = null, confirmText = "确认", dang
     dialog.addEventListener("click", backdrop);
     dialog.showModal();
   });
+}
+/**
+ * 统一关闭入口：先播退场动画再真正 close()。原生 dialog 的 close 是瞬时的，
+ * 直接调用会让进场动画有"突然消失"的割裂感。
+ */
+function closeDialog(dialog) {
+  if (!dialog?.open || dialog.dataset.closing === "1") return;
+  dialog.dataset.closing = "1";
+  dialog.classList.add("closing"); // 让 ::backdrop 一起淡出
+  const done = () => {
+    dialog.classList.remove("closing");
+    delete dialog.dataset.closing;
+    if (dialog.open) dialog.close();
+  };
+  const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+  // 没有 Web Animations（旧浏览器/测试环境）时直接关闭，保证状态正确。
+  if (reduce || typeof dialog.animate !== "function") return done();
+  const animation = dialog.animate(
+    [{ opacity: 1, transform: "translateY(0) scaleY(1)" },
+     { opacity: 0, transform: "translateY(-10px) scaleY(.94)" }],
+    { duration: 170, easing: "cubic-bezier(.4,0,1,1)", fill: "forwards" },
+  );
+  animation.finished.then(done, done);
 }
 /** 点击是否落在弹窗盒子之外（背板）。点击弹窗内边距不算外部，避免误关。 */
 function clickedOutside(dialog, event) {
@@ -142,6 +167,15 @@ function showTip(target) {
 }
 function hideTip() { const tip = tipBox(); tip.hidden = true; }
 function setTip(el, text) { if (text) el.setAttribute("data-tip", text); else el.removeAttribute("data-tip"); }
+// Hero 光晕跟随指针（只写两个 CSS 变量，不触发布局）。
+document.addEventListener("pointermove", event => {
+  const hero = event.target?.closest?.(".hero");
+  if (!hero) return;
+  const rect = hero.getBoundingClientRect?.();
+  if (!rect) return;
+  hero.style.setProperty("--mx", ((event.clientX - rect.left) / rect.width * 100).toFixed(1) + "%");
+  hero.style.setProperty("--my", ((event.clientY - rect.top) / rect.height * 100).toFixed(1) + "%");
+});
 document.addEventListener("pointerover", event => showTip(event.target.closest?.("[data-tip]")));
 document.addEventListener("pointerout", event => { if (event.target.closest?.("[data-tip]")) hideTip(); });
 document.addEventListener("focusin", event => showTip(event.target.closest?.("[data-tip]")));
@@ -524,24 +558,9 @@ function render(data) {
   const lessons=data.lanes?.lessons;
   $("lessonsStatus").textContent=lessons?.status === "available" ? `已记录 ${lessons.count} 条教训，${lessons.eligible} 条达到提出申请的条件。每条须有至少 3 个不同日期的证据；维护者核实、批准并通过单独治理 PR，不自动修改规则。` : "复盘规则：同一规则须有至少 3 个不同日期的证据，才可提出人工晋升申请；教训记录状态待核实。";
   renderProjectPhase(data.github,data);
-  const queueItems = data.github?.status === "ok" ? data.github.tasks?.__queue || [] : [];
-  const queueKey=JSON.stringify([data.github?.status,queueItems,data.tasks,data.taskPhases]);
-  const queue=$("queueList");
-  if (queueKey !== lastQueueKey) {
-    lastQueueKey=queueKey; queue.replaceChildren();
-    if (data.github?.status !== "ok") queue.append(element("div","GitHub 需求列表暂不可用，请检查连接后重试。","empty"));
-    else if (!queueItems.length) queue.append(element("div","没有已创建的需求。","empty"));
-    for (const item of queueItems) {
-    const row=element("div",undefined,"queue-item");
-    const title=element(item.url ? "a" : "span",`#${item.number} ${item.title}`,"pr-link");
-    if (item.url && /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/.test(item.url)) {title.href=item.url;title.target="_blank";title.rel="noopener noreferrer";}
-    const labels=item.labels || [];
-    const checkpoint=item.checkpoint;
-    const live=(data.taskPhases || []).find(t=>t.taskId===item.number);
-    const state=item.state === "CLOSED" ? (item.merged ? "已关闭 · PR 已合并" : "已关闭 · 合并状态待核实") : live?.status === "running" ? "执行中 · "+live.phase : checkpoint?.status === "paused" ? "已暂停 · "+(checkpoint.phase || "阶段未知") : checkpoint?.status === "blocked" ? "已阻塞 · "+(checkpoint.phase || "阶段未知") : checkpoint?.status === "running" ? "本地记录：执行中 · "+(checkpoint.phase || "阶段未知") : item.checkpointUnavailable ? "本地状态不可用" : labels.includes("agent:blocked") ? "等待人工处理" : labels.includes("agent:paused") ? "已暂停" : labels.includes("agent:pr") ? "PR 待处理" : labels.includes("agent:in-progress") ? "GitHub 标签：执行中" : labels.includes("agent:waiting") ? "等待依赖" : labels.includes("agent:ready") ? "可执行" : "未分类";
-    row.append(title,element("span",state,"queue-state"));queue.append(row);
-    }
-  }
+  // 分类按钮同时作用于草稿与已创建需求，否则用户点"已完成"看不到任何变化。
+  lastStatus = data;
+  renderQueue();
   renderDrafts(data.drafts, data.intake);
   updateRunTimers();
   renderTasks(data);
@@ -788,15 +807,43 @@ function draftRow(d) {
   if(d.status==="submitted" && /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/.test(d.url || "")){const a=element("a","查看 Issue");a.href=d.url;a.target="_blank";a.rel="noopener noreferrer";row.append(a);}
   return row;
 }
+/** 已创建需求队列；分类（全部/进行中/已完成）与草稿列表共用同一个筛选状态。 */
+function renderQueue() {
+  const data = lastStatus;
+  if (!data) return;
+  const queueItems = data.github?.status === "ok" ? data.github.tasks?.__queue || [] : [];
+  queueSnapshot = queueItems;
+  const queueVisible = queueItems.filter(item => passesFilter(listFilters.drafts, item.state === "CLOSED"));
+  const queueKey=JSON.stringify([data.github?.status,queueItems,data.tasks,data.taskPhases,listFilters.drafts]);
+  const queue=$("queueList");
+  if (queueKey === lastQueueKey) return;
+  lastQueueKey=queueKey; queue.replaceChildren();
+  if (data.github?.status !== "ok") { queue.append(element("div","GitHub 需求列表暂不可用，请检查连接后重试。","empty")); return; }
+  if (!queueItems.length) { queue.append(element("div","没有已创建的需求。","empty")); return; }
+  if (!queueVisible.length) { queue.append(element("div","当前分类下没有已创建的需求。","empty")); return; }
+  for (const item of queueVisible) {
+    const row=element("div",undefined,"queue-item");
+    const title=element(item.url ? "a" : "span",`#${item.number} ${item.title}`,"pr-link");
+    if (item.url && /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/.test(item.url)) {title.href=item.url;title.target="_blank";title.rel="noopener noreferrer";}
+    const checkpoint=item.checkpoint;
+    const live=(data.taskPhases || []).find(t=>t.taskId===item.number);
+    const state=item.state === "CLOSED" ? (item.merged ? "已关闭 · PR 已合并" : "已关闭 · 合并状态待核实") : live?.status === "running" ? "执行中 · "+live.phase : checkpoint?.status === "paused" ? "已暂停 · "+(checkpoint.phase ?? "") : checkpoint?.status === "blocked" ? "已阻塞 · "+(checkpoint.phase ?? "") : "等待执行";
+    row.append(title,element("span",state,"queue-state"));queue.append(row);
+  }
+}
 function renderDrafts(data, legacy = null) {
   draftState=data ?? {items:[],busy:false};
   const items=draftState.items || []; const list=$("draftList");
+  // 没有草稿时这个按钮没有意义，隐藏它（有草稿才出现）。
+  $("batchDrafts").hidden = items.length === 0;
   const key=JSON.stringify(draftState)+JSON.stringify([...selectedDrafts])+JSON.stringify(legacy)+listFilters.drafts;
   if(key!==lastDraftKey){lastDraftKey=key;list.replaceChildren();
     if(legacy?.status === "unknown"){const row=element("div",undefined,"queue-item");row.append(element("span","旧版提交结果待核实：请先检查 GitHub。"));const b=element("button","已核实，解除旧锁定");b.addEventListener("click",async()=>{if(await askConfirm("确认已检查 GitHub 中是否创建该需求？")){try{await api("/api/intake-clear",{method:"POST",body:{id:legacy.id}});await refresh();}catch(e){notice("解除锁定失败："+e.message);}}});row.append(b);list.append(row);}
     const activeItems=items.filter(x=>!draftDone(x));
     const completed=items.filter(draftDone);
-    renderFilterBar("draftFilters","drafts",()=>{lastDraftKey="";renderDrafts(draftState,legacy);},{all:items.length,active:activeItems.length,done:completed.length});
+    const allCount = items.length + queueSnapshot.length;
+    const doneCount = completed.length + queueSnapshot.filter(x => x.state === "CLOSED").length;
+    renderFilterBar("draftFilters","drafts",()=>{lastDraftKey="";lastQueueKey="";renderQueue();renderDrafts(draftState,legacy);},{all:allCount,active:allCount-doneCount,done:doneCount});
     if(listFilters.drafts!=="done") for(const d of activeItems) list.append(draftRow(d));
     // Finished requirements live in a collapsed section so the active queue stays short.
     if(completed.length && listFilters.drafts!=="active"){const box=element("details",undefined,"queue-completed");box.append(element("summary","已完成需求 · "+completed.length+" 项"));const inner=element("div",undefined,"queue-list");for(const d of completed) inner.append(draftRow(d));box.append(inner);list.append(box);}
@@ -1039,7 +1086,7 @@ $("openModels").addEventListener("click",async()=>{
   if (!connected || !modelSettings) return notice("先连接控制台并检查模型配置。");
   modelDraft=JSON.parse(JSON.stringify(modelSettings));$("modelScope").value="global";$("modelSearch").value="";$("modelDialog").showModal();renderModelChoices();await refreshModelCatalog();
 });
-$("closeModels").addEventListener("click",()=>$("modelDialog").close());
+$("closeModels").addEventListener("click",()=>closeDialog($("modelDialog")));
 $("reloadModels").addEventListener("click",()=>void refreshModelCatalog());
 $("modelScope").addEventListener("change",renderModelChoices);
 $("modelSearch").addEventListener("input",renderModelChoices);
@@ -1048,14 +1095,14 @@ $("saveModels").addEventListener("click",async()=>{
   if (!modelDraft) return;
   if (Object.values(modelDraft.roles).some(x=>Array.isArray(x) && x.length===0)) {$("modelMessage").textContent="角色自定义配置至少选一个模型，或选择继承。";return;}
   if (!await askConfirm("保存后立即对接下来启动的任务生效（可能改变模型费用）。正在运行的任务保持原模型；手动安全停止后再启动会使用新配置。确定？"))return;
-  try {const result=await api("/api/model-settings",{method:"POST",body:modelDraft});modelSettings=result.settings;$("modelDialog").close();notice("模型配置已保存：正在运行的任务不受影响，下次启动（含安全停止后重启）使用新配置。");await refresh();}
+  try {const result=await api("/api/model-settings",{method:"POST",body:modelDraft});modelSettings=result.settings;closeDialog($("modelDialog"));notice("模型配置已保存：正在运行的任务不受影响，下次启动（含安全停止后重启）使用新配置。");await refresh();}
   catch(error){$("modelMessage").textContent="保存失败："+error.message;}
 });
 
 for (const lane of ["product","quality"]) {
   const cap=lane[0].toUpperCase()+lane.slice(1);
   $("open"+cap).addEventListener("click",()=>void openAdvisory(lane));
-  $("close"+cap).addEventListener("click",()=>$(lane+"Dialog").close());
+  $("close"+cap).addEventListener("click",()=>closeDialog($(lane+"Dialog")));
   $("run"+cap).addEventListener("click",()=>void startAdvisory(lane));
   $(lane+"Reports").addEventListener("change",()=>void loadAdvisory(lane,$(lane+"Reports").value));
   $(lane+"Copy").addEventListener("click",()=>{const report=currentReports[lane];if(report) void copyText(reportParts(report).map(p=>p.title+"\n"+p.text).join("\n\n"));});
@@ -1064,8 +1111,8 @@ for (const lane of ["product","quality"]) {
 }
 $("themeToggle").addEventListener("click", () => setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark"));
 $("openIntake").addEventListener("click",()=>{if(!connected)return notice("先连接本地控制台。");openDraft(null);});
-$("closeIntake").addEventListener("click",()=>$("intakeDialog").close());
-$("saveDraft").addEventListener("click",async()=>{if(await saveDraft()){$("intakeDialog").close();notice("草稿已保存。");}});
+$("closeIntake").addEventListener("click",()=>closeDialog($("intakeDialog")));
+$("saveDraft").addEventListener("click",async()=>{if(await saveDraft()){closeDialog($("intakeDialog"));notice("草稿已保存。");}});
 $("assessIntake").addEventListener("click",async()=>{if(!await askConfirm("评估会调用一次模型并可能产生费用，继续？"))return;const d=draftState.items.find(x=>x.id===editingDraft);if(!d||d.requirement!==$("requirement").value.trim()){if(!await saveDraft())return;}await draftAction("assess",{id:editingDraft});});
 $("saveAnswers").addEventListener("click",async()=>{if(await saveDraftAnswers())notice("确认结果已保存。");});
 $("reassessIntake").addEventListener("click",async()=>{
@@ -1164,10 +1211,10 @@ document.addEventListener("visibilitychange", () => {
     if (connected && !streamController && !reconnectTimer) void openStream(tokenInput.value.trim());
   }
 });
-$("closeMilestone").addEventListener("click",()=>$("milestoneDialog").close());
+$("closeMilestone").addEventListener("click",()=>closeDialog($("milestoneDialog")));
 // 里程碑 / 产品 / 质量报告只读，没有输入：点外部直接关闭。
 for (const id of ["milestoneDialog", "productDialog", "qualityDialog"])
-  dismissOnBackdrop($(id), () => $(id).close());
+  dismissOnBackdrop($(id), () => closeDialog($(id)));
 const savedToken = restoreToken();
 if (savedToken) {
   tokenInput.value = savedToken;

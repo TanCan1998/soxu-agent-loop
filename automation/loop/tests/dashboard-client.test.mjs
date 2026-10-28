@@ -863,3 +863,42 @@ test("a click inside the dialog box does not dismiss it", async () => {
   await tick();
   assert.equal(closed, false, "clicks inside the dialog keep it open");
 });
+
+test("the batch submit button hides when the draft list is empty", async () => {
+  const empty = page({ handler: () => ({ ok:true, status:200, json: async () => ({ ...STATUS, drafts:{ busy:false, items:[] } }) }) });
+  empty.elements.token.value = TOKEN;
+  empty.elements.connect.dispatch("click");
+  await tick();
+  assert.equal(empty.elements.batchDrafts.hidden, true, "no drafts -> no batch button");
+
+  const assessment = { title:"T", feasibility:"可行", plan:"P", dependencies:"无", acceptance:"A", unknowns:"无", questions:[] };
+  const filled = page({ handler: () => ({ ok:true, status:200, json: async () => ({ ...STATUS,
+    drafts:{ busy:false, items:[{ id:"11111111-1111-4111-8111-111111111111", requirement:"一个需求", status:"review", assessment }] } }) }) });
+  filled.elements.token.value = TOKEN;
+  filled.elements.connect.dispatch("click");
+  await tick();
+  assert.equal(filled.elements.batchDrafts.hidden, false, "drafts present -> batch button visible");
+});
+
+test("the draft filter also filters the created requirement queue", async () => {
+  const queue = [
+    { number:11, title:"进行中的需求", state:"OPEN", url:null, labels:[] },
+    { number:12, title:"已完成的需求", state:"CLOSED", url:null, labels:[] },
+  ];
+  const snapshot = { ...STATUS, github:{ status:"ok", updatedAt:null, tasks:{ __queue: queue } }, drafts:{ busy:false, items:[] } };
+  const app = page({ handler: () => ({ ok:true, status:200, json: async () => snapshot }) });
+  app.elements.token.value = TOKEN;
+  app.elements.connect.dispatch("click");
+  await tick();
+  const rows = () => app.elements.queueList.children.filter(node => node.className === "queue-item");
+  assert.equal(rows().length, 2, "both requirements listed under 全部");
+
+  app.elements.draftFilters.children.find(button => button.dataset.filter === "done").dispatch("click");
+  await tick();
+  assert.equal(rows().length, 1, "已完成 narrows the created queue too");
+
+  app.elements.draftFilters.children.find(button => button.dataset.filter === "active").dispatch("click");
+  await tick();
+  assert.equal(rows().length, 1, "进行中 keeps only the open requirement");
+});
+
