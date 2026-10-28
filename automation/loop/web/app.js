@@ -75,14 +75,12 @@ function showConfirmDialog({ message, input = null, confirmText = "确认", dang
       dialog.close();
       $("confirmAccept").removeEventListener("click", accept);
       $("confirmCancel").removeEventListener("click", cancel);
-      $("confirmCancelTop").removeEventListener("click", cancel);
       resolve(value);
     };
     const accept = () => finish(input === null ? true : $("confirmInput").value.trim());
     const cancel = () => finish(input === null ? false : null);
     $("confirmAccept").addEventListener("click", accept);
     $("confirmCancel").addEventListener("click", cancel);
-    $("confirmCancelTop").addEventListener("click", cancel);
     dialog.showModal();
   });
 }
