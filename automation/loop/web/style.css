@@ -86,11 +86,14 @@ dialog{width:min(680px,calc(100vw - 30px));max-height:85vh;overflow:auto;border:
 [hidden]{display:none!important}
 /* 模态定位显式声明：部分环境下 UA 的 dialog:modal{position:fixed;margin:auto} 不生效，
    弹窗会掉到文档底部。这里直接写死居中，跨环境一致。 */
-dialog[open]{position:fixed;inset:0;margin:auto;height:fit-content}
+dialog[open]{position:fixed;inset:0;margin:auto;height:fit-content;z-index:2147483000}
 /* 弹窗：上下展开 + 淡入；关闭时立即收起（原生 dialog 关闭无法动画，故只做进场） */
-dialog[open]{animation:dialog-expand .22s cubic-bezier(.2,.8,.3,1)}
-dialog[open]::backdrop{animation:backdrop-fade .22s ease-out}
-@keyframes dialog-expand{from{opacity:0;transform:translateY(-14px) scaleY(.86)}to{opacity:1;transform:translateY(0) scaleY(1)}}
+dialog[open]{animation:dialog-in .34s cubic-bezier(.2,.85,.3,1)}
+/* 不用 backdrop-filter：部分 WebView/旧内核会把背板提升为独立合成层，
+   导致页面内容盖到弹窗之上。改用更深的纯色背板。 */
+dialog[open]::backdrop{animation:backdrop-fade .34s ease-out;background:#000000a6}
+/* 等比缩放 + 轻微上移 + 去模糊：比 scaleY 变形柔和，不会显得廉价。 */
+@keyframes dialog-in{from{opacity:0;transform:translateY(12px) scale(.97);filter:blur(8px)}to{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}}
 @keyframes backdrop-fade{from{opacity:0}to{opacity:1}}
 /* 按钮反馈：按下轻微下压 + 焦点环 */
 button{transition:transform .12s ease,box-shadow .12s ease,background-color .12s ease,border-color .12s ease}
@@ -190,7 +193,7 @@ dialog.closing::backdrop{animation:backdrop-out .18s ease-in forwards}
 }
 
 /* 顶栏：贴顶、极细描边、玻璃感 */
-.top{position:sticky;top:0;z-index:50;height:66px;background:color-mix(in srgb,var(--paper) 82%,transparent);backdrop-filter:saturate(1.4) blur(14px);border-bottom:1px solid var(--hero-line)}
+.top{position:sticky;top:0;z-index:50;height:66px;background:color-mix(in srgb,var(--paper) 52%,transparent);backdrop-filter:saturate(1.7) blur(22px);border-bottom:1px solid var(--hero-line)}
 .brand strong{font-family:var(--font-serif);font-size:22px;font-weight:400;letter-spacing:.01em;color:var(--hero-ink)}
 .brand span{font-family:var(--font-mono);font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:var(--hero-muted)}
 .connection{font-family:var(--font-mono);font-size:11px;letter-spacing:.04em;color:var(--hero-muted)}
@@ -239,7 +242,12 @@ dialog.closing::backdrop{animation:backdrop-out .18s ease-in forwards}
 
 /* 深浅色切换过渡：只在切换瞬间挂 .theme-switching，避免常态开销 */
 html.theme-switching,html.theme-switching *,html.theme-switching *::before,html.theme-switching *::after{
-  transition:background-color .32s ease,color .32s ease,border-color .32s ease,
-    box-shadow .32s ease,fill .32s ease,stroke .32s ease,opacity .32s ease !important;
+  transition:background-color .58s cubic-bezier(.4,0,.2,1),color .58s cubic-bezier(.4,0,.2,1),
+    border-color .58s cubic-bezier(.4,0,.2,1),box-shadow .58s cubic-bezier(.4,0,.2,1),
+    fill .58s ease,stroke .58s ease,opacity .58s ease !important;
 }
 @media (prefers-reduced-motion:reduce){html.theme-switching,html.theme-switching *,html.theme-switching *::before,html.theme-switching *::after{transition:none !important}}
+/* 主题切换转场：由 JS 用 clip-path 圆形扩散驱动，这里禁掉默认交叉淡化 */
+::view-transition-old(root),::view-transition-new(root){animation:none;mix-blend-mode:normal}
+::view-transition-old(root){z-index:1}
+::view-transition-new(root){z-index:2}
