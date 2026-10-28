@@ -25,7 +25,11 @@ function node() {
   const result = {
     value: "", textContent: "", disabled: false, checked: false, dataset: {}, className: "", style: {}, replacements:0, setAttribute(name, value) { attributes[name] = String(value); }, removeAttribute(name) { delete attributes[name]; }, getAttribute(name) { return attributes[name] ?? null; }, closest(selector) { const m = selector.match(/^\\[data-tip\\]$/) ? "data-tip" : selector.startsWith(".") ? selector.slice(1) : null; let node = result; while (node) { if (m === "data-tip" && node.getAttribute && node.getAttribute("data-tip") !== null) return node; if (m && m !== "data-tip" && node.className === m) return node; node = node.parent; } return null; },
     scrollTop: 0, scrollHeight: 0, clientHeight: 100,
-    classList: { add() {}, remove() {}, contains(value) { return result.className.split(" ").includes(value); } },
+    classList: {
+      add(...names) { const set = new Set(result.className.split(" ").filter(Boolean)); for (const n of names) set.add(n); result.className = [...set].join(" "); },
+      remove(...names) { const set = new Set(result.className.split(" ").filter(Boolean)); for (const n of names) set.delete(n); result.className = [...set].join(" "); },
+      contains(value) { return result.className.split(" ").includes(value); },
+    },
     showModal() {result.open=true;}, close() {result.open=false;},
     addEventListener(type, fn) { listeners.set(type, fn); },
     removeEventListener(type) { listeners.delete(type); },
@@ -900,5 +904,45 @@ test("the draft filter also filters the created requirement queue", async () => 
   app.elements.draftFilters.children.find(button => button.dataset.filter === "active").dispatch("click");
   await tick();
   assert.equal(rows().length, 1, "进行中 keeps only the open requirement");
+});
+
+test("a stuck closing animation cannot wedge a dialog shut", async () => {
+  const settings = { schemaVersion: 1, revision: 0, global: [], roles: { developer: null, reviewer: null, product: null, quality: null, intake: null }, favorites: [] };
+  const view = page({ handler: () => ({ ok: true, status: 200, json: async () => ({ ...STATUS, modelInfo: { status: "ok", settings, selected: {} } }) }) });
+  view.elements.token.value = TOKEN;
+  view.elements.connect.dispatch("click");
+  await tick();
+  const dialog = view.elements.modelDialog;
+  // 模拟上一次退场动画没收到 finished：open 且 dataset.closing 残留
+  dialog.open = true;
+  dialog.dataset.closing = "1";
+  let closed = false;
+  dialog.close = () => { closed = true; dialog.open = false; };
+  view.elements.closeModels.dispatch("click");
+  assert.equal(closed, true, "stuck closing state forces the dialog closed");
+  assert.equal(dialog.dataset.closing, undefined, "stuck marker is cleared");
+
+  let shown = 0;
+  dialog.showModal = () => { shown += 1; dialog.open = true; };
+  view.elements.openModels.dispatch("click");
+  await tick();
+  assert.equal(shown, 1, "the dialog can be opened again after a stuck close");
+});
+
+test("closing a dialog clears its transient closing state", async () => {
+  const view = page();
+  view.elements.token.value = TOKEN;
+  view.elements.connect.dispatch("click");
+  await tick();
+  const dialog = view.elements.milestoneDialog;
+  dialog.open = true;
+  dialog.className = "closing";
+  dialog.dataset.closing = "1";
+  let closed = false;
+  dialog.close = () => { closed = true; dialog.open = false; };
+  view.elements.closeMilestone.dispatch("click");
+  assert.equal(closed, true, "dialog closes");
+  assert.equal(dialog.className, "", "closing class is removed");
+  assert.equal(dialog.dataset.closing, undefined, "closing marker is removed");
 });
 

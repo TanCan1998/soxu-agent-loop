@@ -92,7 +92,7 @@ function showConfirmDialog({ message, input = null, confirmText = "确认", dang
     $("confirmAccept").addEventListener("click", accept);
     $("confirmCancel").addEventListener("click", cancel);
     dialog.addEventListener("click", backdrop);
-    dialog.showModal();
+    openDialog(dialog);
   });
 }
 /**
@@ -100,23 +100,50 @@ function showConfirmDialog({ message, input = null, confirmText = "确认", dang
  * 直接调用会让进场动画有"突然消失"的割裂感。
  */
 function closeDialog(dialog) {
-  if (!dialog?.open || dialog.dataset.closing === "1") return;
+  if (!dialog) return;
+  // 上一次退场没有收尾（动画事件丢失等）：立刻强制关闭，绝不让弹窗卡在
+  // open + closing 状态——否则它既关不掉、又因为已 open 而无法再次打开。
+  if (dialog.dataset.closing === "1") {
+    delete dialog.dataset.closing;
+    dialog.classList.remove("closing");
+    if (dialog.open) { try { dialog.close(); } catch { /* already closed */ } }
+    return;
+  }
+  if (!dialog.open) {
+    delete dialog.dataset.closing;
+    dialog.classList.remove("closing");
+    return;
+  }
   dialog.dataset.closing = "1";
   dialog.classList.add("closing"); // 让 ::backdrop 一起淡出
+  let settled = false;
   const done = () => {
+    if (settled) return;
+    settled = true;
     dialog.classList.remove("closing");
     delete dialog.dataset.closing;
-    if (dialog.open) dialog.close();
+    if (dialog.open) { try { dialog.close(); } catch { /* already closed */ } }
   };
   const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
   // 没有 Web Animations（旧浏览器/测试环境）时直接关闭，保证状态正确。
   if (reduce || typeof dialog.animate !== "function") return done();
-  const animation = dialog.animate(
-    [{ opacity: 1, transform: "translateY(0) scale(1)", filter: "blur(0)" },
-     { opacity: 0, transform: "translateY(8px) scale(.98)", filter: "blur(6px)" }],
-    { duration: 200, easing: "cubic-bezier(.4,0,.6,1)", fill: "forwards" },
-  );
-  animation.finished.then(done, done);
+  try {
+    const animation = dialog.animate(
+      [{ opacity: 1, transform: "translateY(0) scale(1)", filter: "blur(0)" },
+       { opacity: 0, transform: "translateY(8px) scale(.98)", filter: "blur(6px)" }],
+      { duration: 200, easing: "cubic-bezier(.4,0,.6,1)", fill: "forwards" },
+    );
+    // finished 在 top-layer 元素被移除或动画被打断时可能永不 resolve，用超时兜底。
+    animation?.finished?.then(done, done);
+    setTimeout(done, 260);
+  } catch { done(); }
+}
+/** 统一打开入口：先清掉上一次退场残留，避免 showModal 抛 InvalidStateError。 */
+function openDialog(dialog) {
+  if (!dialog) return;
+  delete dialog.dataset.closing;
+  dialog.classList.remove("closing");
+  if (!dialog.open) dialog.showModal();
 }
 /**
  * 自绘滚动指示条。
@@ -485,7 +512,7 @@ function showMilestoneDetail(id, name, stage, limited, source) {
     row.append(label,chip); list.append(row);
     }
   }
-  $("milestoneDialog").showModal();
+  openDialog($("milestoneDialog"));
 }
 /** 里程碑区域的活跃/即将进行任务：定宽标签 + 悬浮全称。 */
 function renderPhaseTasks(data) {
@@ -808,7 +835,7 @@ async function deleteAdvisory(lane, all) {
 async function openAdvisory(lane) {
   if (!connected) return notice("先连接本地控制台。");
   const prefix=lane === "product" ? "product" : "quality";
-  $(prefix+"Dialog").showModal();await loadAdvisory(lane);
+  openDialog($(prefix+"Dialog"));await loadAdvisory(lane);
 }
 async function startAdvisory(lane) {
   if (!connected) return notice("先连接本地控制台。");
@@ -975,7 +1002,7 @@ function renderDrafts(data, legacy = null) {
   updateAnswerButtons();
   $("queueReady").checked=current.ready===true;$("intakeMilestone").value=current.milestone||"";
 }
-function openDraft(d){editingDraft=d?.id||null;$("requirement").value=d?.requirement||"";lastIntakeKey="";if(!$("intakeDialog").open)$("intakeDialog").showModal();renderDrafts(draftState);}
+function openDraft(d){editingDraft=d?.id||null;$("requirement").value=d?.requirement||"";lastIntakeKey="";openDialog($("intakeDialog"));renderDrafts(draftState);}
 async function draftAction(action,body){try{const result=await api("/api/drafts-"+action,{method:"POST",body});renderDrafts(result);return result;}catch(e){notice("操作失败："+e.message);return null;}}
 async function saveDraft(){const result=await draftAction("save",{id:editingDraft,requirement:$("requirement").value});if(result && !editingDraft)editingDraft=result.items.at(-1).id;lastIntakeKey="";if(result)renderDrafts(result);return result;}
 function updateAnswerButtons(){const complete=collectAnswers().every(a=>a.selected.length || a.custom.trim());$("saveAnswers").disabled=!complete || draftState.busy;$("submitIntake").disabled=!complete || draftState.busy;$("reassessIntake").disabled=!complete || draftState.busy || currentIntake?.status!=="review";}
@@ -1165,7 +1192,7 @@ async function refreshModelCatalog() {
 }
 $("openModels").addEventListener("click",async()=>{
   if (!connected || !modelSettings) return notice("先连接控制台并检查模型配置。");
-  modelDraft=JSON.parse(JSON.stringify(modelSettings));$("modelScope").value="global";$("modelSearch").value="";$("modelDialog").showModal();setTimeout(refreshScrollIndicators,0);renderModelChoices();await refreshModelCatalog();
+  modelDraft=JSON.parse(JSON.stringify(modelSettings));$("modelScope").value="global";$("modelSearch").value="";openDialog($("modelDialog"));setTimeout(refreshScrollIndicators,0);renderModelChoices();await refreshModelCatalog();
 });
 $("closeModels").addEventListener("click",()=>closeDialog($("modelDialog")));
 $("reloadModels").addEventListener("click",()=>void refreshModelCatalog());
