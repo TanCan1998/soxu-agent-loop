@@ -102,7 +102,7 @@ async function liveExternalLocks(root) {
 
 /** Owns only jobs explicitly launched from this web process. It cannot seize external Pi processes. */
 export class DashboardCoordinator extends EventEmitter {
-  constructor({ root = ROOT, spawn = fork, githubStatus = readGithubStatus, mergePr = mergeTaskPr, intake = null, advisory = null } = {}) {
+  constructor({ root = ROOT, spawn = fork, githubStatus = readGithubStatus, mergePr = mergeTaskPr, intake = null, advisory = null, checkToolUpdate = checkUpdate } = {}) {
     super();
     this.root = root;
     this.spawn = spawn;
@@ -133,6 +133,7 @@ export class DashboardCoordinator extends EventEmitter {
     this.attachedTimer = null;
     this.updateInfo = null;
     this.updateCheckedAt = 0;
+    this.checkToolUpdate = checkToolUpdate;
     this.stopped = false;
   }
 
@@ -227,7 +228,7 @@ export class DashboardCoordinator extends EventEmitter {
   /** Read-only hot-update check, cached briefly to keep status polling cheap. */
   async refreshUpdate({ force = false } = {}) {
     if (!force && this.updateInfo && Date.now() - this.updateCheckedAt < 60_000) return this.updateInfo;
-    try { this.updateInfo = await checkUpdate({ toolRoot: TOOL_ROOT }); }
+    try { this.updateInfo = await this.checkToolUpdate({ toolRoot: TOOL_ROOT }); }
     catch (e) { this.updateInfo = { status: "error", error: String(e?.message ?? e).slice(0, 300) }; }
     this.updateCheckedAt = Date.now();
     this.emit("dashboard:event", { type: "status", data: {} });
@@ -308,6 +309,8 @@ export class DashboardCoordinator extends EventEmitter {
     this.refreshGithub();
     this.refreshLanes();
     const attached = await this.syncRunner().catch(() => null);
+    // Keep the update badge meaningful without a manual click; cached for 60s.
+    void this.refreshUpdate().catch(() => {});
     await this.intake.initialized;
     await this.drafts.initialized;
     const [progress, externalLocks, modelInfo] = await Promise.all([
