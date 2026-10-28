@@ -12,17 +12,37 @@ import {git} from '../src/process.mjs';
 const markdown = (id, priority = 'P0', dependencies = []) => `---\nid: ${id}\npriority: ${priority}\ndependencies: [${dependencies.join(', ')}]\n---\n\n# Title ${id}\n`;
 const doc = (id,priority,deps) => parseTaskDocument(`${id}.md`,markdown(id,priority,deps));
 
-test('real backlog validates, and only 001/002 are initially schedulable', async () => {
+test('an absent backlog or done directory is an empty catalog, not an error', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'soxu-catalog-'));
+  try {
+    // Neither directory exists yet.
+    assert.deepEqual(await loadTaskCatalog(root), []);
+    await mkdir(join(root, 'tasks', 'done'), { recursive: true });
+    await writeFile(join(root, 'tasks', 'done', 'TASK-001.md'), markdown('TASK-001'));
+    const doneOnly = await loadTaskCatalog(root);
+    assert.deepEqual(doneOnly.map(t => t.id), ['TASK-001']);
+    assert.equal(doneOnly[0].archived, true);
+    // Backlog present, done absent.
+    const other = await mkdtemp(join(tmpdir(), 'soxu-catalog-b-'));
+    await mkdir(join(other, 'tasks', 'backlog'), { recursive: true });
+    await writeFile(join(other, 'tasks', 'backlog', 'TASK-002.md'), markdown('TASK-002'));
+    const backlogOnly = await loadTaskCatalog(other);
+    assert.deepEqual(backlogOnly.map(t => t.id), ['TASK-002']);
+    assert.equal(backlogOnly[0].archived, false);
+    await rm(other, { recursive: true, force: true });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('real catalog keeps every finished task archived and schedules nothing', async () => {
   const catalog = await loadTaskCatalog();
+  validateTaskCatalog(catalog); // archived tasks still satisfy dependencies
   const plan = planTaskQueue(catalog, new Set());
-  assert.deepEqual(plan.ready.map(t => t.id), ['TASK-001','TASK-002']);
-  assert.deepEqual(plan.waiting.map(t => t.id), ['TASK-003','TASK-004','TASK-006']);
-  const second = planTaskQueue(catalog,new Set(['TASK-001','TASK-002']));
-  assert.deepEqual(second.ready.map(t=>t.id),['TASK-003','TASK-004']);
-  assert.deepEqual(second.waiting.map(t=>t.id),['TASK-006']);
-  // TASK-005 is archived: it never re-enters the queue but still satisfies dependencies.
-  assert.ok(catalog.some(t => t.id === 'TASK-005' && t.archived), 'TASK-005 must stay in the catalog as archived');
-  assert.deepEqual(planTaskQueue(catalog,new Set(catalog.map(t=>t.id))).ready.map(t=>t.id),[]);
+  // Every TASK-001..006 is merged and archived in tasks/done, so the queue is empty.
+  assert.deepEqual(plan.ready.map(t => t.id), []);
+  assert.deepEqual(plan.waiting.map(t => t.id), []);
+  assert.deepEqual([...catalog].map(t => t.id).sort(),
+    ['TASK-001','TASK-002','TASK-003','TASK-004','TASK-005','TASK-006']);
+  assert.ok(catalog.every(t => t.archived), 'all real tasks must be archived after completion');
 });
 
 test('frontmatter rejects duplicate dependencies, unknown refs, cycles and inconsistent ids', () => {

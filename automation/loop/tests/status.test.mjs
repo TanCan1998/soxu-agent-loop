@@ -77,8 +77,10 @@ test('missing H1 uses TASK id instead of blank title', async () => {
 test('status CLI renders task headings and JSON includes titles', async () => {
   const script = join(TOOL_ROOT, 'automation/loop/src/cli.mjs');
   const {stdout} = await execFileAsync(process.execPath, [script, 'status'], {cwd:ROOT, timeout:10000});
-  for (const id of ['001', '002']) {
-    const markdown = await readFile(join(ROOT, `tasks/backlog/TASK-${id}.md`), 'utf8');
+  // Finished tasks are archived in tasks/done; title text still comes from the markdown.
+  const ids = ['001', '002'];
+  for (const id of ids) {
+    const markdown = await readFile(join(ROOT, `tasks/done/TASK-${id}.md`), 'utf8');
     const title = markdown.match(/^#[ \t]+(.+)$/m)?.[1].trim();
     assert.ok(title && stdout.includes(`#${Number(id)} ${title}`), `Missing status heading for TASK-${id}`);
   }
@@ -86,8 +88,8 @@ test('status CLI renders task headings and JSON includes titles', async () => {
   const {stdout: json} = await execFileAsync(process.execPath, [script, 'status', '--json'], {cwd:ROOT, timeout:10000});
   const snapshot = JSON.parse(json);
   const items = [...snapshot.pending, ...snapshot.running, ...snapshot.paused, ...snapshot.blocked, ...snapshot.done];
-  for (const id of ['001', '002']) {
-    const markdown = await readFile(join(ROOT, `tasks/backlog/TASK-${id}.md`), 'utf8');
+  for (const id of ids) {
+    const markdown = await readFile(join(ROOT, `tasks/done/TASK-${id}.md`), 'utf8');
     const title = markdown.match(/^#[ \t]+(.+)$/m)?.[1].trim();
     assert.equal(items.find(item => item.id === Number(id))?.title, title);
   }

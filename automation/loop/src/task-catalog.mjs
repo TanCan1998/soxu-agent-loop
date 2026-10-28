@@ -61,7 +61,9 @@ export async function loadTaskCatalog(root = ROOT) {
     const dir = join(root, "tasks", category);
     let files;
     try { files = (await readdir(dir)).filter(x => FILE.test(x)).sort(); }
-    catch (err) { if (err.code === "ENOENT" && category === "done") continue; throw err; }
+    // Either directory may be absent: an empty backlog is normal once every task is
+    // archived, and an absent done/ simply means nothing finished yet.
+    catch (err) { if (err.code === "ENOENT") continue; throw err; }
     for (const file of files) {
       tasks.push({...parseTaskDocument(file, await readFile(join(dir, file), "utf8")), archived: category === "done"});
     }
