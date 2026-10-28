@@ -46,7 +46,7 @@ function page({ storage = new Map(), handler = () => response(), hidden = false,
   const ids = [
     "milestoneDialog", "milestoneTitle", "milestoneDetails", "closeMilestone", "token", "tokenLabel", "authPanel", "authNotice", "connect", "notice", "connection", "dot", "globalRun", "running", "pending", "done",
     "total", "badge", "runner", "updated", "stop", "tasks", "logs", "refresh", "copyLogs", "intakeRunState", "productReports", "productCopy", "productDelete", "productClear", "qualityReports", "qualityCopy", "qualityDelete", "qualityClear",
-    "navOverview", "navExecution", "navMonitor", "navRequirements", "navLanes", "navModels", "pageOverview", "pageExecution", "pageMonitor", "pageRequirements", "pageLanes", "pageModels", "modelSummary", "openModels", "closeModels", "reloadModels", "saveModels", "modelScope", "modelSearch", "modelInherit", "modelDialog", "modelGroups", "modelMessage", "logLimit", "logFilter", "followLogs", "logCount", "agentCards", "githubStatus", "autoMerge", "updateStatus", "updateTool", "projectPhaseTitle", "projectPhaseDetail", "projectPhaseCount", "roadmapCards", "developmentLane", "productLane", "qualityLane", "lessonsStatus", "openProduct", "openQuality", "productDialog", "qualityDialog", "closeProduct", "closeQuality", "runProduct", "runQuality", "productRunState", "qualityRunState", "productReport", "qualityReport", "projectProgress", "projectProgressFill", "themeToggle", "openIntake", "intakeDialog", "intakeSummary", "queueList", "closeIntake", "requirement", "assessIntake", "intakeResult", "queueReady", "intakeMilestone", "submitIntake", "clearIntake", "draftList", "batchDrafts", "saveDraft", "saveAnswers",
+    "navOverview", "navExecution", "navMonitor", "navRequirements", "navLanes", "navModels", "pageOverview", "pageExecution", "pageMonitor", "pageRequirements", "pageLanes", "pageModels", "modelSummary", "openModels", "closeModels", "reloadModels", "saveModels", "modelScope", "modelSearch", "modelInherit", "modelDialog", "modelGroups", "modelMessage", "logLimit", "logFilter", "followLogs", "logCount", "agentCards", "githubStatus", "autoMerge", "updateStatus", "updateTool", "projectPhaseTitle", "projectPhaseDetail", "projectPhaseCount", "roadmapCards", "developmentLane", "productLane", "qualityLane", "lessonsStatus", "openProduct", "openQuality", "productDialog", "qualityDialog", "closeProduct", "closeQuality", "runProduct", "runQuality", "productRunState", "qualityRunState", "productReport", "qualityReport", "projectProgress", "projectProgressFill", "themeToggle", "openIntake", "intakeDialog", "intakeSummary", "queueList", "closeIntake", "requirement", "assessIntake", "intakeResult", "queueReady", "intakeMilestone", "submitIntake", "clearIntake", "draftList", "batchDrafts", "saveDraft", "saveAnswers", "requirementField", "assessingHint", "reassessIntake",
   ];
   const elements = Object.fromEntries(ids.map(id => [id, node()]));
   const actions = ["start", "loop", "watch"].map(command => {
@@ -401,6 +401,93 @@ test("copy reports a manual hint when the browser blocks every clipboard path", 
   app.elements.copyLogs.dispatch("click");
   await tick();
   assert.match(app.elements.notice.textContent, /长按选择文本/);
+});
+
+test("completed requirements are grouped in a collapsed section", async () => {
+  const assessment = { title:"已完成需求", feasibility:"可行", plan:"P", dependencies:"无", acceptance:"A", unknowns:"无", questions:[] };
+  const items = [
+    { id:"11111111-1111-4111-8111-111111111111", requirement:"这是仍在评审中的需求描述", status:"review", assessment, answers:[{selected:[],custom:"已确认"}] },
+    { id:"22222222-2222-4222-8222-222222222222", requirement:"这是已经提交完成的需求", status:"submitted", assessment, url:"https://github.com/a/b/issues/9" },
+  ];
+  const app = page({ handler: () => ({ ok:true, status:200, json: async () => ({ ...STATUS, drafts:{ busy:false, items } }) }) });
+  app.elements.token.value = TOKEN;
+  app.elements.connect.dispatch("click");
+  await tick();
+  const rows = app.elements.draftList.children;
+  // Active queue holds only the review item; the finished one is inside a closed details.
+  assert.equal(rows.filter(row => row.tagName === "details").length, 1);
+  const done = rows.find(row => row.tagName === "details");
+  assert.equal(done.open, undefined);
+  assert.match(done.children[0].textContent, /已完成需求 · 1 项/);
+  assert.equal(done.children[1].children.length, 1);
+  const active = rows.find(row => row.tagName !== "details");
+  assert.equal(active.children[0].children[1].textContent.includes("已经提交完成"), false);
+});
+
+test("the requirement box is hidden while the agent evaluates", async () => {
+  const assessment = { title:"评估中", feasibility:"可行", plan:"P", dependencies:"无", acceptance:"A", unknowns:"无", questions:[] };
+  const id = "33333333-3333-4333-8333-333333333333";
+  const app = page({ handler: path => path === "/api/drafts-save"
+    ? { ok:true, status:200, json: async () => ({ busy:false, items:[{ id, requirement:"这段需求描述足够长", status:"assessing", startedAt:new Date().toISOString(), assessment }] }) }
+    : { ok:true, status:200, json: async () => ({ ...STATUS, drafts:{ busy:false, items:[] } }) } });
+  app.elements.token.value = TOKEN;
+  app.elements.connect.dispatch("click");
+  await tick();
+  app.elements.openIntake.dispatch("click");
+  app.elements.requirement.value = "这段需求描述足够长";
+  app.elements.saveDraft.dispatch("click");
+  await tick();
+  await tick();
+  assert.equal(app.elements.requirementField.hidden, true);
+  assert.equal(app.elements.assessingHint.hidden, false);
+});
+
+test("dependencies render as a list with recognised task ids and questions fold with unknowns", async () => {
+  const assessment = {
+    title:"T", feasibility:"有条件可行", feasibilityStatus:"conditional", plan:"P",
+    dependencies:"依赖项：TASK-001 先合并\n依赖项：TASK-002 再开始", acceptance:"A",
+    unknowns:"部署平台", questions:[{ text:"部署平台", options:["Windows","Linux"] }],
+  };
+  const id = "44444444-4444-4444-8444-444444444444";
+  const item = { id, requirement:"这是一个需要依赖与待确认的需求", status:"review", assessment };
+  const app = page({ handler: () => ({ ok:true, status:200, json: async () => ({ ...STATUS, drafts:{ busy:false, items:[item] } }) }) });
+  app.elements.token.value = TOKEN;
+  app.elements.connect.dispatch("click");
+  await tick();
+  const edit = app.elements.draftList.children[0].children.find(node => node.textContent === "编辑");
+  edit.dispatch("click");
+  await tick();
+  const blocks = app.elements.intakeResult.children;
+  const dep = blocks.find(node => node.tagName === "details" && /前置依赖/.test(node.children[0].textContent));
+  assert.ok(dep, "dependencies block missing");
+  const depBody = dep.children[1];
+  assert.match(depBody.children[0].textContent, /识别到前置任务：TASK-001、TASK-002/);
+  assert.equal(depBody.children[1].children.length, 2);
+  const unknowns = blocks.find(node => node.tagName === "details" && /未知与待确认/.test(node.children[0].textContent));
+  assert.ok(unknowns, "unknowns block missing");
+  assert.equal(unknowns.open, true);
+  assert.ok(unknowns.children.some(node => node.tagName === "fieldset"), "questions must live inside the unknowns block");
+});
+
+test("answers enable a re-assessment that posts the draft id", async () => {
+  const assessment = { title:"T", feasibility:"有条件可行", feasibilityStatus:"conditional", plan:"P", dependencies:"无", acceptance:"A", unknowns:"部署平台", questions:[{ text:"部署平台", options:["Windows","Linux"] }] };
+  const id = "55555555-5555-4555-8555-555555555555";
+  const item = { id, requirement:"这是需要重新评估可行性的需求", status:"review", assessment };
+  const app = page({ handler: () => ({ ok:true, status:200, json: async () => ({ ...STATUS, drafts:{ busy:false, items:[item] } }) }) });
+  app.elements.token.value = TOKEN;
+  app.elements.connect.dispatch("click");
+  await tick();
+  app.elements.draftList.children[0].children.find(node => node.textContent === "编辑").dispatch("click");
+  await tick();
+  assert.equal(app.elements.reassessIntake.disabled, true, "needs answers first");
+  const field = app.elements.intakeResult.querySelectorAll("fieldset")[0];
+  field.querySelector("textarea").value = "Windows 11";
+  field.dispatch("input");
+  assert.equal(app.elements.reassessIntake.disabled, false);
+  app.elements.reassessIntake.dispatch("click");
+  await tick();
+  const request = app.requests.find(x => x.path === "/api/drafts-reassess");
+  assert.deepEqual(JSON.parse(request.options.body), { id });
 });
 
 test("active intake and advisory report show elapsed state",async()=>{

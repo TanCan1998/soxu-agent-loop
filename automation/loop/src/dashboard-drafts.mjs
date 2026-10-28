@@ -7,8 +7,10 @@ import { assessRequirement, submitRequirement, assessmentFailure } from './dashb
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
 const validText=x=>typeof x==='string' && x.trim().length>=10 && x.length<=6000;
 const validId=x=>typeof x==='string' && /^[0-9a-f-]{36}$/.test(x);
+// "无"/"暂无" is a statement that there is nothing to confirm, not a question.
+const NO_UNKNOWNS = /^(?:无|暂无|没有|无需确认|无待确认项|none|null|n\/a)[。.！!]?$/i;
 export function questions(assessment) {
-  const raw=String(assessment?.unknowns || '').split(/\n+/).map(x=>x.replace(/^\s*(?:[-*•]|\d+[.、])\s*/, '').trim()).filter(Boolean);
+  const raw=String(assessment?.unknowns || '').split(/\n+/).map(x=>x.replace(/^\s*(?:[-*•]|\d+[.、])\s*/, '').trim()).filter(x=>x && !NO_UNKNOWNS.test(x));
   const supplied=Array.isArray(assessment?.questions) ? assessment.questions : [];
   if(supplied.length===raw.length && raw.length) return supplied.map((q,i)=>({...q,text:raw[i]===q.text?q.text:raw[i]+" — "+q.text}));
   return [...raw.map(text=>({text,options:[]})),...supplied];
@@ -43,6 +45,35 @@ export class DraftStore {
   async evaluate(id){await this.initialized;if(this.busy) throw fail('intake-busy',409);const d=this.item(id);if(['unknown','submitting','submitted'].includes(d.status)) throw fail('draft-locked',409);this.busy=true;d.status='assessing';d.startedAt=new Date().toISOString();delete d.error;delete d.answers;this.abort=new AbortController();
     try{await this.persist();}catch(e){this.busy=false;throw e;}
     Promise.resolve().then(()=>this.assess(this.root,d.requirement,this.abort.signal,this.index++,m=>{d.model=m;this.onChange();})).then(result=>{d.assessment=result;d.status='review';}).catch(error=>{d.status='draft';d.error=assessmentFailure(error);}).finally(async()=>{this.abort=null;try{await this.persist();}catch{d.error='无法保存评估结果，请检查本地存储。';}this.busy=false;this.onChange();});return this.state();}
+  /**
+   * Re-assess with the answers already given, so filling an unknown can flip
+   * conditional -> feasible instead of forcing the user to start over.
+   */
+  async reassess(id){
+    await this.initialized;
+    if(this.busy) throw fail('intake-busy',409);
+    const d=this.item(id);
+    if(d.status!=='review') throw fail('assessment-not-ready',409);
+    if(!Array.isArray(d.answers)||!d.answers.length) throw fail('answers-required',409);
+    const answers=validateAnswers(d.assessment,d.answers);
+    const previousAssessment=d.assessment;
+    const previousQuestions=questions(previousAssessment);
+    this.busy=true;d.status='assessing';d.startedAt=new Date().toISOString();delete d.error;delete d.answersReset;this.abort=new AbortController();
+    try{await this.persist();}catch(e){this.busy=false;throw e;}
+    Promise.resolve()
+      .then(()=>this.assess(this.root,d.requirement,this.abort.signal,this.index++,m=>{d.model=m;this.onChange();},{answers,questions:previousQuestions,confirmed:true}))
+      .then(result=>{
+        d.assessment=result;d.status='review';d.reassessCount=(d.reassessCount??0)+1;
+        // Keep answers only when the question list still lines up; otherwise the
+        // user must confirm again rather than submit stale answers.
+        const next=questions(result);
+        if(next.length===answers.length) d.answers=answers; else { delete d.answers; d.answersReset=true; }
+        delete d.ready;
+      })
+      .catch(error=>{d.status='review';d.assessment=previousAssessment;d.answers=answers;d.error=assessmentFailure(error);})
+      .finally(async()=>{this.abort=null;try{await this.persist();}catch{d.error='无法保存评估结果，请检查本地存储。';}this.busy=false;this.onChange();});
+    return this.state();
+  }
   async answer(id,answers,ready,milestone){await this.initialized;if(this.busy) throw fail('intake-busy',409);const d=this.item(id);if(d.status!=='review') throw fail('assessment-not-ready',409);if(typeof ready!=='boolean'||!(milestone===null||/^M[0-4]$/.test(milestone))) throw fail('invalid-choice');d.answers=validateAnswers(d.assessment,answers);d.ready=ready;d.milestone=milestone;await this.persist();return this.state();}
   async batch(ids){await this.initialized;if(this.busy) throw fail('intake-busy',409);if(!Array.isArray(ids)||!ids.length||ids.length>200||new Set(ids).size!==ids.length) throw fail('invalid-selection');const selected=ids.map(id=>this.item(id));for(const d of selected){if(d.status!=='review'||typeof d.ready!=='boolean') throw fail('assessment-not-ready',409);validateAnswers(d.assessment,d.answers);if(/(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9]{24,})/.test(JSON.stringify(d))) throw fail('potential-secret',409);}
     if(this.items.some(d=>d.status==='unknown')) throw fail('submit-unresolved',409);this.busy=true;try{try{await access(join(dataRoot(this.root),'intake','pending-submit.json'));throw fail('submit-unresolved',409);}catch(e){if(e.code!=='ENOENT') throw e;}}catch(e){this.busy=false;throw e;}this.onChange();
