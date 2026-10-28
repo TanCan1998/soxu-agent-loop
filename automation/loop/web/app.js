@@ -829,8 +829,16 @@ function updateRunTimers() {
     if(job) state.textContent="正在分析 · "+elapsedText(job.startedAt)+(job.model?.provider ? " · "+job.model.provider+" / "+job.model.model : "");
   }
 }
+let themeSwitchTimer = null;
 function setTheme(theme) {
-  document.documentElement.dataset.theme = theme;
+  const root = document.documentElement;
+  // 只在用户主动切换时做过渡；首次应用主题不应播放动画。
+  if (root.dataset.theme && root.dataset.theme !== theme) {
+    root.classList?.add("theme-switching");
+    clearTimeout(themeSwitchTimer);
+    themeSwitchTimer = setTimeout(() => root.classList?.remove("theme-switching"), 380);
+  }
+  root.dataset.theme = theme;
   const nextTheme = theme === "dark" ? "light" : "dark";
   const label = nextTheme === "light" ? "切换到浅色主题" : "切换到深色主题";
   $("themeToggle").dataset.nextTheme = nextTheme;
