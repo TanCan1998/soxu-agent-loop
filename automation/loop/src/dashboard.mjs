@@ -84,21 +84,38 @@ function cleanLine(value) {
     .replace(/((?:api[_-]?key|token|password|authorization|secret)\s*[:=]\s*)[^\s,;]+/gi, "$1[redacted]")
     .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, " ").slice(0, 400);
 }
-async function liveExternalLocks(root) {
+/**
+ * 外部锁明细。锁文件由旧版任务脚本写入，任务崩溃后会残留：进程已不存在的锁
+ * 记为 stale，不再计入 busy —— 否则界面会长期显示"外部任务运行中"并禁用启动。
+ */
+async function inspectExternalLocks(root) {
   const dir = join(root, ".soxu", "locks");
   let files;
   try { files = await readdir(dir); }
-  catch (e) { if (e.code === "ENOENT") return 0; throw e; }
-  let running = 0;
+  catch (e) { if (e.code === "ENOENT") return { active: 0, stale: 0, locks: [] }; throw e; }
+  const locks = [];
   for (const file of files.filter(x => /^(?:github|local)-issue-\d+\.lock$/.test(x))) {
+    const path = join(dir, file);
+    let pid = null, startedAt = null, readable = true;
     try {
-      const lock = JSON.parse(await readFile(join(dir, file), "utf8"));
-      if (!Number.isSafeInteger(lock.pid) || lock.pid <= 0) { running++; continue; }
-      try { process.kill(lock.pid, 0); running++; }
-      catch (e) { if (e.code !== "ESRCH") running++; }
-    } catch (e) { if (e.code !== "ENOENT") running++; }
+      const lock = JSON.parse(await readFile(path, "utf8"));
+      pid = Number.isSafeInteger(lock.pid) && lock.pid > 0 ? lock.pid : null;
+      startedAt = typeof lock.startedAt === "string" ? lock.startedAt : null;
+    } catch (e) { if (e.code !== "ENOENT") readable = false; }
+    let alive = false;
+    if (readable && pid) {
+      try { process.kill(pid, 0); alive = true; }
+      catch (e) { alive = e.code !== "ESRCH"; }
+    }
+    let updatedAt = null;
+    try { updatedAt = (await stat(path)).mtime.toISOString(); } catch { /* vanished */ }
+    locks.push({ file, pid, startedAt, updatedAt, stale: !alive });
   }
-  return running;
+  return {
+    active: locks.filter(l => !l.stale).length,
+    stale: locks.filter(l => l.stale).length,
+    locks,
+  };
 }
 
 /** Owns only jobs explicitly launched from this web process. It cannot seize external Pi processes. */
@@ -320,9 +337,9 @@ export class DashboardCoordinator extends EventEmitter {
     void this.refreshUpdate().catch(() => {});
     await this.intake.initialized;
     await this.drafts.initialized;
-    const [progress, externalLocks, modelInfo] = await Promise.all([
+    const [progress, externalLockInfo, modelInfo] = await Promise.all([
       localProgress(this.root, id => readCheckpoint(id, join(dataRoot(this.root), "checkpoints"))),
-      liveExternalLocks(this.root),
+      inspectExternalLocks(this.root),
       Promise.all([readModelSettings(this.root),loadRoleModels(process.env,{root:this.root})]).then(([settings,selected])=>({status:"ok",settings,selected,envOverrides:{developer:Boolean(process.env.SOXU_DEVELOPER_PROVIDER || process.env.SOXU_DEVELOPER_MODEL),reviewer:Boolean(process.env.SOXU_REVIEWER_PROVIDER || process.env.SOXU_REVIEWER_MODEL)}})).catch(()=>({status:"unavailable"})),
     ]);
     // Checkpoints use GitHub issue numbers, which need not match TASK identifiers.
@@ -368,8 +385,10 @@ export class DashboardCoordinator extends EventEmitter {
       update: this.updateInfo,
       publish: this.publishInfo ?? null,
       lastRun: this.lastRun,
-      externalLocks,
-      busy: this.reserved || this.active !== null || attached !== null || externalLocks > 0,
+      externalLocks: externalLockInfo.active,
+      externalLockStale: externalLockInfo.stale,
+      externalLockDetails: externalLockInfo.locks,
+      busy: this.reserved || this.active !== null || attached !== null || externalLockInfo.active > 0,
       log: this.lines.slice(-MAX_LOGS),
       note: "Task phase is a checkpoint, not proof of a live Pi process; controls affect only dashboard-launched jobs.",
     };
@@ -381,7 +400,7 @@ export class DashboardCoordinator extends EventEmitter {
     if (await this.syncRunner()) throw Object.assign(new Error("runner-busy"), { status: 409 });
     this.reserved = true; // reserve before awaiting disk I/O to reject simultaneous requests
     try {
-      if (await liveExternalLocks(this.root)) throw Object.assign(new Error("external-runner-active"), { status: 409 });
+      if ((await inspectExternalLocks(this.root)).active) throw Object.assign(new Error("external-runner-active"), { status: 409 });
       const args = [command];
       const script = join(TOOL_ROOT, "automation", "loop", "src", "cli.mjs");
       // Detached so that restarting the dashboard (hot update) cannot kill a run.
@@ -470,7 +489,7 @@ export class DashboardCoordinator extends EventEmitter {
     if (this.reserved || this.active) throw Object.assign(new Error("runner-busy"), {status:409});
     this.reserved = true;
     try {
-      if (await liveExternalLocks(this.root)) throw Object.assign(new Error("external-runner-active"), {status:409});
+      if ((await inspectExternalLocks(this.root)).active) throw Object.assign(new Error("external-runner-active"), {status:409});
       const found = Object.values(this.github.tasks).some(t => t.issue === issue && t.pr?.number === pr && t.pr.state === "open");
       if (this.github.status !== "ok" || !found) throw Object.assign(new Error("pr-not-listed"), {status:409});
       const result = await this.mergePr(this.root, issue, pr, undefined, await integrationBase());

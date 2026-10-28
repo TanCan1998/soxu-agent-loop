@@ -130,8 +130,8 @@ body:has(dialog[open]){overflow:hidden}
 ::-webkit-scrollbar-thumb{background:#ffffff24;border:3px solid transparent;background-clip:padding-box;border-radius:99px;transition:background-color .15s,box-shadow .15s}
 ::-webkit-scrollbar-thumb:hover{background:#ffffff3d;background-clip:padding-box;box-shadow:0 0 8px var(--accent, #528fff88)}
 ::-webkit-scrollbar-corner{background:transparent}
-html{scrollbar-width:thin;scrollbar-color:#ffffff24 transparent}
-html:hover{scrollbar-color:#ffffff3d transparent}
+
+
 [data-theme="light"] ::-webkit-scrollbar-thumb{background:#0000002b;background-clip:padding-box}
 [data-theme="light"] ::-webkit-scrollbar-thumb:hover{background:#00000040;background-clip:padding-box}
 
@@ -148,3 +148,72 @@ html:hover{scrollbar-color:#ffffff3d transparent}
 #modelDialog .model-groups{flex:1 1 auto;min-height:0;max-height:none;overflow:auto;overscroll-behavior:contain}
 #modelDialog .dialog-head,#modelDialog > p,#modelDialog > label,#modelDialog > select,#modelDialog > input{flex:0 0 auto}
 #modelDialog .dialog-actions{flex:0 0 auto;margin-top:16px}
+
+/* Firefox 专用：Chromium 识别 scrollbar-color 后会忽略 ::-webkit-scrollbar，故用特性查询隔离 */
+/* 只在 Firefox 用标准属性：Chromium 一旦识别 scrollbar-color 就会忽略 ::-webkit-scrollbar，
+   而 selector(::-webkit-scrollbar) 在 Chromium 里返回 false，不能用它做反向判定。 */
+@supports (-moz-appearance: none){
+  html{scrollbar-width:thin;scrollbar-color:#ffffff2e transparent}
+  [data-theme="light"] html,[data-theme="light"]{scrollbar-color:#1010142e transparent}
+}
+
+/* 弹窗退场动画（原生 dialog 关闭是瞬时的，先播动画再 close） */
+dialog.closing{animation:dialog-collapse .18s cubic-bezier(.4,0,1,1) forwards;pointer-events:none}
+dialog.closing::backdrop{animation:backdrop-out .18s ease-in forwards}
+@keyframes dialog-collapse{from{opacity:1;transform:translateY(0) scaleY(1)}to{opacity:0;transform:translateY(-10px) scaleY(.94)}}
+@keyframes backdrop-out{from{opacity:1}to{opacity:0}}
+@media (prefers-reduced-motion:reduce){dialog.closing,dialog.closing::backdrop{animation-duration:.01s}}
+
+/* ==========================================================================
+   顶部视觉：参考 getartcraft.com 的纸感极简语言
+   —— 衬线大标题 + 等宽标签 + 极淡描边 + 扫描线纹理 + 跟随光晕
+   ========================================================================== */
+:root{
+  --paper:#f2f1ee;--paper-raised:#faf9f7;--paper-sunken:#e9e8e4;
+  --hero-ink:#101014;--hero-muted:#1010149e;--hero-line:#10101429;
+  --hero-accent:#2d81ff;--hero-scan:#10101408;
+  --font-serif:"Instrument Serif","Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Songti SC",serif;
+  --font-mono:"Geist Mono",ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+[data-theme="dark"]{
+  --paper:#0e0f12;--paper-raised:#15171c;--paper-sunken:#0a0b0e;
+  --hero-ink:#f2f1ee;--hero-muted:#f2f1ee9e;--hero-line:#f2f1ee24;
+  --hero-scan:#f2f1ee06;
+}
+
+/* 顶栏：贴顶、极细描边、玻璃感 */
+.top{position:sticky;top:0;z-index:50;height:66px;background:color-mix(in srgb,var(--paper) 82%,transparent);backdrop-filter:saturate(1.4) blur(14px);border-bottom:1px solid var(--hero-line)}
+.brand strong{font-family:var(--font-serif);font-size:22px;font-weight:400;letter-spacing:.01em;color:var(--hero-ink)}
+.brand span{font-family:var(--font-mono);font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:var(--hero-muted)}
+.connection{font-family:var(--font-mono);font-size:11px;letter-spacing:.04em;color:var(--hero-muted)}
+
+/* Hero：纸面 + 扫描线 + 跟随光晕 */
+.hero{position:relative;overflow:hidden;display:block;padding:64px 0 56px;margin-bottom:30px;border-bottom:1px solid var(--hero-line)}
+.hero-copy{position:relative;z-index:2;max-width:760px}
+.hero .eyebrow{display:inline-flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:10.5px;font-weight:500;letter-spacing:.2em;text-transform:uppercase;color:var(--hero-muted);margin:0 0 18px}
+.eyebrow-dot{width:5px;height:5px;border-radius:50%;background:var(--hero-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--hero-accent) 22%,transparent)}
+.hero h1{font-family:var(--font-serif);font-size:clamp(40px,6.4vw,68px);font-weight:400;line-height:.98;letter-spacing:-.028em;color:var(--hero-ink);margin:0 0 20px}
+.hero-serif{display:inline;color:var(--hero-ink);font-style:italic;padding-left:.14em}
+.hero-sub{font-size:13.5px;line-height:1.72;color:var(--hero-muted);margin:0;max-width:52ch}
+.hero-glow{position:absolute;inset:-40% -10% auto -10%;height:150%;z-index:1;pointer-events:none;background:radial-gradient(600px circle at var(--mx,72%) var(--my,18%),color-mix(in srgb,var(--hero-accent) 20%,transparent),transparent 62%);opacity:.9;transition:background .18s linear}
+.hero-scan{position:absolute;inset:0;z-index:1;pointer-events:none;background:repeating-linear-gradient(to bottom,transparent 0 3px,var(--hero-scan) 3px 4px);mask-image:linear-gradient(to bottom,transparent,#000 18%,#000 76%,transparent)}
+
+/* 入场：轻微上升 + 去模糊，节奏错开 */
+.hero .eyebrow,.hero h1,.hero-sub{animation:hero-rise .62s cubic-bezier(.16,.84,.34,1) both}
+.hero h1{animation-delay:.06s}
+.hero-sub{animation-delay:.12s}
+@keyframes hero-rise{from{opacity:0;transform:translateY(16px);filter:blur(7px)}to{opacity:1;transform:none;filter:blur(0)}}
+
+/* 主题下的纸面底色（浅色为主，深色保持对比） */
+[data-theme="light"] body,[data-theme="light"] :root{background:var(--paper)}
+[data-theme="dark"] body{background:var(--paper)}
+[data-theme="light"] .panel,[data-theme="light"] .stat{background:var(--paper-raised);border-color:var(--hero-line)}
+[data-theme="dark"] .panel,[data-theme="dark"] .stat{background:var(--paper-raised);border-color:var(--hero-line)}
+
+@media (max-width:720px){
+  .hero{padding:40px 0 36px}
+  .hero-sub br{display:none}
+}
+@media (prefers-reduced-motion:reduce){
+  .hero .eyebrow,.hero h1,.hero-sub{animation:none}
+}
