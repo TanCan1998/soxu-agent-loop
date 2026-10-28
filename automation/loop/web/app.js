@@ -102,6 +102,7 @@ function element(tag, value, className) {
 function disableControls() {
   for (const button of document.querySelectorAll("[data-command]")) button.disabled = true;
   $("stop").disabled = true;
+  $("publishButton").disabled = true;
   $("updateTool").disabled = true;
 }
 function lostAuthorization(token) {
@@ -438,6 +439,18 @@ function render(data) {
   if (data.update) lastUpdate = data.update;
   $("updateStatus").textContent = updateText(lastUpdate, data.protocolVersion);
   applyUpdateBadge(lastUpdate);
+  // 发布：preview 随时可发；release 需 dev 已合入 main（服务端也会再校验一次）。
+  const publish = data.publish ?? null;
+  $("publishButton").disabled = Boolean(data.busy);
+  $("publishButton").title = publish?.error
+    ? "发布状态不可用：" + publish.error
+    : publish?.mergedIntoRelease ? "dev 已合入 main，可发布 release" : "release 需先把 dev 合入 main";
+  $("publishRelease").disabled = !publish?.mergedIntoRelease;
+  $("publishHint").textContent = publish?.error
+    ? "发布状态不可用：" + publish.error
+    : publish?.mergedIntoRelease
+      ? (publish.integrationBranch + " 已合入 " + publish.releaseBranch + "，release 将在 " + publish.releaseBranch + " 打 tag")
+      : "release 需先把 " + (publish?.integrationBranch ?? "dev") + " 合入 " + (publish?.releaseBranch ?? "main");
   $("githubStatus").textContent = data.github?.status === "ok" ? "GitHub PR / CI 状态已更新 · " + new Date(data.github.updatedAt).toLocaleTimeString()
     : data.github?.status === "unavailable" ? "GitHub 状态不可用：请检查 gh 登录和网络；任务与 CI 状态未知" : "GitHub 状态加载中";
   $("developmentLane").textContent = data.runner ? "控制台调度运行中" : data.externalLocks ? "存在外部任务锁" : "控制台当前空闲";
@@ -1016,6 +1029,20 @@ tokenInput.addEventListener("input", () => {
 });
 for (const button of document.querySelectorAll("[data-command]"))
   button.addEventListener("click", () => void execute(button.dataset.command));
+$("publishButton").addEventListener("click", () => { $("publishMenu").hidden = !$("publishMenu").hidden; });
+for (const [id, mode] of [["publishPreview", "preview"], ["publishRelease", "release"]]) {
+  $(id).addEventListener("click", async () => {
+    if (!connected) return notice("先连接本地控制台。");
+    $("publishMenu").hidden = true;
+    const label = mode === "preview" ? "发布 preview 版本（在集成分支打预发布 tag 并触发构建）" : "发布 release 版本（在 main 打 tag 并触发构建）";
+    if (!await askConfirm(label + "？此操作会推送 tag 并触发 GitHub Actions 构建。")) return;
+    try {
+      const result = await api("/api/publish", { method: "POST", body: { mode } });
+      notice("已发起发布：" + result.status + " " + (result.tag ?? ""));
+      await refresh();
+    } catch (error) { notice("发布失败：" + error.message); }
+  });
+}
 $("stop").addEventListener("click", async () => {
   if (!await askConfirm("请求优雅停止当前调度；工作树和检查点将保留。确定吗？")) return;
   try {

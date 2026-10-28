@@ -27,6 +27,7 @@ import {
   runnerCompatible, writeRunnerState, runnerLogPath,
 } from "./runner-state.mjs";
 import { checkUpdate, applyUpdate as applyToolUpdate } from "./update.mjs";
+import { publishStatus, publish as publishVersion } from "./publish.mjs";
 import { loadTaskCatalog } from "./task-catalog.mjs";
 import { buildLocalRoadmap } from "./roadmap-local.mjs";
 
@@ -310,6 +311,11 @@ export class DashboardCoordinator extends EventEmitter {
     this.refreshGithub();
     this.refreshLanes();
     const attached = await this.syncRunner().catch(() => null);
+    // 发布状态：dev 是否已合入 main、本地检出与版本；30 秒缓存，避免每次轮询都跑 git/gh。
+    if (!this.publishInfo || Date.now() - (this.publishCheckedAt ?? 0) > 30_000) {
+      this.publishCheckedAt = Date.now();
+      this.publishInfo = await publishStatus().catch(error => ({ error: String(error?.message ?? error).slice(0, 200) }));
+    }
     // Keep the update badge meaningful without a manual click; cached for 60s.
     void this.refreshUpdate().catch(() => {});
     await this.intake.initialized;
@@ -360,6 +366,7 @@ export class DashboardCoordinator extends EventEmitter {
           ? { command: attached.command, startedAt: attached.startedAt, pid: attached.pid, stopping: attached.stopping, attached: true, compatible: attached.compatible, protocolVersion: attached.protocolVersion, toolVersion: attached.toolVersion }
           : null,
       update: this.updateInfo,
+      publish: this.publishInfo ?? null,
       lastRun: this.lastRun,
       externalLocks,
       busy: this.reserved || this.active !== null || attached !== null || externalLocks > 0,
@@ -439,6 +446,17 @@ export class DashboardCoordinator extends EventEmitter {
     } finally {
       this.reserved = false;
     }
+  }
+  /** 发布 preview（dev 直接打预发布 tag）或 release（dev 已合入 main 后在 main 发布）。 */
+  async publishVersion(mode) {
+    if (this.reserved || this.active) throw Object.assign(new Error("runner-busy"), { status: 409 });
+    this.reserved = true;
+    try {
+      const result = await publishVersion(mode);
+      this.push(`Publish ${mode}: ${result.status} ${result.tag ?? ""}`.trim());
+      this.publishCheckedAt = 0;
+      return result;
+    } finally { this.reserved = false; this.emit("dashboard:event", { type: "status", data: {} }); }
   }
   setAutoMerge(enabled) {
     if (typeof enabled !== "boolean") throw Object.assign(new Error("invalid-setting"), {status:400});
@@ -618,7 +636,7 @@ export function createDashboardServer({ root = ROOT, token, bindHost = "127.0.0.
       try { return reply(200, await coordinator.snapshot()); }
       catch { return reply(503, { error: "status-unavailable" }); }
     }
-    if (request.method === "POST" && ["/api/run", "/api/stop", "/api/merge", "/api/auto-merge", "/api/update", "/api/intake-assess", "/api/intake-submit", "/api/intake-clear", "/api/drafts-save", "/api/drafts-move", "/api/drafts-remove", "/api/drafts-assess", "/api/drafts-answer", "/api/drafts-batch", "/api/drafts-resolve", "/api/drafts-reassess", "/api/advisory-run", "/api/advisory-delete", "/api/model-settings"].includes(request.url)) {
+    if (request.method === "POST" && ["/api/run", "/api/stop", "/api/merge", "/api/auto-merge", "/api/update", "/api/publish", "/api/intake-assess", "/api/intake-submit", "/api/intake-clear", "/api/drafts-save", "/api/drafts-move", "/api/drafts-remove", "/api/drafts-assess", "/api/drafts-answer", "/api/drafts-batch", "/api/drafts-resolve", "/api/drafts-reassess", "/api/advisory-run", "/api/advisory-delete", "/api/model-settings"].includes(request.url)) {
       if (!request.headers.origin || !originAllowed(request.headers.origin) || request.headers["content-type"] !== "application/json") {
         return reply(403, { error: "invalid-request-origin" });
       }
@@ -627,6 +645,11 @@ export function createDashboardServer({ root = ROOT, token, bindHost = "127.0.0.
         if (request.url === "/api/model-settings") {
           try {const settings=await saveModelSettings(body,root);return reply(200,{settings});}
           catch(error){return reply(error.status ?? 400,{error:error.status ? error.message : "invalid-model-settings"});}
+        }
+        if (request.url === "/api/publish") {
+          if (!body || Object.keys(body).sort().join(",") !== "mode" || !["preview", "release"].includes(body.mode)) return reply(400, { error: "invalid-body" });
+          try { return reply(200, await coordinator.publishVersion(body.mode)); }
+          catch (error) { return reply(error.status ?? 409, { error: error.message, details: error.details ?? null }); }
         }
         if (request.url === "/api/update") {
           if (!body || Object.keys(body).sort().join(",") !== "action" || !["check", "apply"].includes(body.action)) return reply(400, { error: "invalid-body" });

@@ -48,6 +48,7 @@ function page({ storage = new Map(), handler = () => response(), hidden = false,
     "milestoneDialog", "milestoneTitle", "milestoneDetails", "closeMilestone", "token", "tokenLabel", "authPanel", "authNotice", "connect", "notice", "connection", "dot", "globalRun", "running", "pending", "done",
     "total", "badge", "runner", "updated", "stop", "tasks", "logs", "refresh", "copyLogs", "intakeRunState", "productReports", "productCopy", "productDelete", "productClear", "qualityReports", "qualityCopy", "qualityDelete", "qualityClear",
     "navOverview", "navExecution", "navMonitor", "navRequirements", "navLanes", "navModels", "pageOverview", "pageExecution", "pageMonitor", "pageRequirements", "pageLanes", "pageModels", "modelSummary", "openModels", "closeModels", "reloadModels", "saveModels", "modelScope", "modelSearch", "modelInherit", "modelDialog", "modelGroups", "modelMessage", "logLimit", "logFilter", "followLogs", "logCount", "agentCards", "githubStatus", "autoMerge", "updateStatus", "updateTool", "taskFilters", "draftFilters", "milestoneFilters", "projectPhaseTasks",
+    "publishButton", "publishMenu", "publishPreview", "publishRelease", "publishHint",
     "confirmDialog", "confirmTitle", "confirmMessage", "confirmInputLabel", "confirmInput", "confirmAccept", "confirmCancel", "confirmCancelTop", "projectPhaseTitle", "projectPhaseDetail", "projectPhaseCount", "roadmapCards", "developmentLane", "productLane", "qualityLane", "lessonsStatus", "openProduct", "openQuality", "productDialog", "qualityDialog", "closeProduct", "closeQuality", "runProduct", "runQuality", "productRunState", "qualityRunState", "productReport", "qualityReport", "projectProgress", "projectProgressFill", "themeToggle", "openIntake", "intakeDialog", "intakeSummary", "queueList", "closeIntake", "requirement", "assessIntake", "intakeResult", "queueReady", "intakeMilestone", "submitIntake", "clearIntake", "draftList", "batchDrafts", "saveDraft", "saveAnswers", "requirementField", "assessingHint", "reassessIntake",
   ];
   const elements = Object.fromEntries(ids.map(id => [id, node()]));
@@ -748,5 +749,29 @@ test("the token survives a reload when sessionStorage was cleared (Android brows
   assert.equal(app.elements.authPanel.hidden, true, "auto-connects from localStorage");
   assert.equal(storage.get(TOKEN_STORAGE_KEY), TOKEN, "sessionStorage is re-seeded");
   assert.equal(preferences.get(TOKEN_STORAGE_KEY), TOKEN, "localStorage keeps the token across reloads");
+});
+
+test("the publish menu gates release on dev being merged into main", async () => {
+  const notMerged = { ...STATUS, publish: { integrationBranch: "dev", releaseBranch: "main", mergedIntoRelease: false, version: "0.1.0" } };
+  const view = page({ handler: () => ({ ok: true, status: 200, json: async () => notMerged }) });
+  view.elements.token.value = TOKEN;
+  view.elements.connect.dispatch("click");
+  await tick();
+  assert.equal(view.elements.publishRelease.disabled, true, "release stays locked until dev is merged");
+  assert.match(view.elements.publishHint.textContent, /release 需先把 dev 合入 main/);
+  assert.equal(view.elements.publishButton.title, "release 需先把 dev 合入 main");
+  view.elements.publishPreview.dispatch("click");
+  await tick();
+  await tick();
+  const request = view.requests.find(entry => entry.path === "/api/publish");
+  assert.deepEqual(JSON.parse(request.options.body), { mode: "preview" });
+
+  const merged = { ...STATUS, publish: { integrationBranch: "dev", releaseBranch: "main", mergedIntoRelease: true, version: "0.1.0" } };
+  const ready = page({ handler: () => ({ ok: true, status: 200, json: async () => merged }) });
+  ready.elements.token.value = TOKEN;
+  ready.elements.connect.dispatch("click");
+  await tick();
+  assert.equal(ready.elements.publishRelease.disabled, false);
+  assert.match(ready.elements.publishHint.textContent, /已合入 main/);
 });
 
