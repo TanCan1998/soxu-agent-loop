@@ -584,11 +584,20 @@ function setTheme(theme) {
   $("themeToggle").setAttribute("title", label);
   save(preferenceStorage, THEME_KEY, theme);
 }
+const NO_UNKNOWNS=/^(?:无|暂无|没有|无需确认|无待确认项|none|null|n\/a)[。.！!]?$/i;
 function draftQuestions(a) {
-  const raw=String(a?.unknowns || "").split(/\n+/).map(x=>x.replace(/^\s*(?:[-*•]|\d+[.、])\s*/, "").trim()).filter(Boolean);
+  const raw=String(a?.unknowns || "").split(/\n+/).map(x=>x.replace(/^\s*(?:[-*•]|\d+[.、])\s*/, "").trim()).filter(x=>x && !NO_UNKNOWNS.test(x));
   const supplied=Array.isArray(a?.questions) ? a.questions : [];
   if(supplied.length===raw.length && raw.length) return supplied.map((q,i)=>({...q,text:raw[i]===q.text?q.text:raw[i]+" — "+q.text}));
   return [...raw.map(text=>({text,options:[]})),...supplied];
+}
+/** One draft row; shared by the active list and the collapsed completed section. */
+function draftRow(d) {
+  const row=element("div",undefined,"queue-item"), label=element("label"), box=element("input");box.type="checkbox";box.checked=selectedDrafts.has(d.id);box.disabled=d.status!=="review" || !Array.isArray(d.answers) || draftState.busy;box.addEventListener("change",()=>{if(box.checked)selectedDrafts.add(d.id);else selectedDrafts.delete(d.id);});label.append(box,document.createTextNode(" "+(d.assessment?.title || d.requirement.slice(0,60))+" · "+({draft:"草稿",review:d.answers?"可提交":"待确认",assessing:"评估中",submitting:"提交中",submitted:"已提交",unknown:"结果待核实"}[d.status]||d.status)));row.append(label);
+  for(const [text,action,disabled] of [["编辑",()=>openDraft(d),["unknown","submitted","submitting"].includes(d.status)],["上移",()=>draftAction("move",{id:d.id,direction:-1}),false],["下移",()=>draftAction("move",{id:d.id,direction:1}),false],["删除",()=>{if(confirm("删除这个草稿？"))void draftAction("remove",{id:d.id});},d.status==="unknown"]]){const b=element("button",text);b.disabled=disabled||draftState.busy;b.addEventListener("click",action);row.append(b);}
+  if(d.status==="unknown"){const b=element("button","核实结果");b.disabled=draftState.busy;b.addEventListener("click",async()=>{const created=confirm("请先在 GitHub 检查。确定已创建选择‘确定’；确认未创建选择‘取消’。");if(created){const url=prompt("输入已创建的 GitHub Issue 链接：");if(!url)return;await draftAction("resolve",{id:d.id,created:true,url});}else if(confirm("确认 GitHub 中没有创建该需求，允许重新提交？"))await draftAction("resolve",{id:d.id,created:false,url:null});});row.append(b);}
+  if(d.status==="submitted" && /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/.test(d.url || "")){const a=element("a","查看 Issue");a.href=d.url;a.target="_blank";a.rel="noopener noreferrer";row.append(a);}
+  return row;
 }
 function renderDrafts(data, legacy = null) {
   draftState=data ?? {items:[],busy:false};
@@ -596,11 +605,10 @@ function renderDrafts(data, legacy = null) {
   const key=JSON.stringify(draftState)+JSON.stringify([...selectedDrafts])+JSON.stringify(legacy);
   if(key!==lastDraftKey){lastDraftKey=key;list.replaceChildren();
     if(legacy?.status === "unknown"){const row=element("div",undefined,"queue-item");row.append(element("span","旧版提交结果待核实：请先检查 GitHub。"));const b=element("button","已核实，解除旧锁定");b.addEventListener("click",async()=>{if(confirm("确认已检查 GitHub 中是否创建该需求？")){try{await api("/api/intake-clear",{method:"POST",body:{id:legacy.id}});await refresh();}catch(e){notice("解除锁定失败："+e.message);}}});row.append(b);list.append(row);}
-    for(const d of items){const row=element("div",undefined,"queue-item"), label=element("label"), box=element("input");box.type="checkbox";box.checked=selectedDrafts.has(d.id);box.disabled=d.status!=="review" || !Array.isArray(d.answers) || draftState.busy;box.addEventListener("change",()=>{if(box.checked)selectedDrafts.add(d.id);else selectedDrafts.delete(d.id);});label.append(box,document.createTextNode(" "+(d.assessment?.title || d.requirement.slice(0,60))+" · "+({draft:"草稿",review:d.answers?"可提交":"待确认",assessing:"评估中",submitting:"提交中",submitted:"已提交",unknown:"结果待核实"}[d.status]||d.status)));row.append(label);
-      for(const [text,action,disabled] of [["编辑",()=>openDraft(d),["unknown","submitted","submitting"].includes(d.status)],["上移",()=>draftAction("move",{id:d.id,direction:-1}),false],["下移",()=>draftAction("move",{id:d.id,direction:1}),false],["删除",()=>{if(confirm("删除这个草稿？"))void draftAction("remove",{id:d.id});},d.status==="unknown"]]){const b=element("button",text);b.disabled=disabled||draftState.busy;b.addEventListener("click",action);row.append(b);}
-      if(d.status==="unknown"){const b=element("button","核实结果");b.disabled=draftState.busy;b.addEventListener("click",async()=>{const created=confirm("请先在 GitHub 检查。确定已创建选择‘确定’；确认未创建选择‘取消’。");if(created){const url=prompt("输入已创建的 GitHub Issue 链接：");if(!url)return;await draftAction("resolve",{id:d.id,created:true,url});}else if(confirm("确认 GitHub 中没有创建该需求，允许重新提交？"))await draftAction("resolve",{id:d.id,created:false,url:null});});row.append(b);}
-      if(d.status==="submitted" && /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/.test(d.url || "")){const a=element("a","查看 Issue");a.href=d.url;a.target="_blank";a.rel="noopener noreferrer";row.append(a);}list.append(row);
-    }
+    for(const d of items.filter(x=>x.status!=="submitted")) list.append(draftRow(d));
+    // Finished requirements live in a collapsed section so the active queue stays short.
+    const completed=items.filter(x=>x.status==="submitted");
+    if(completed.length){const box=element("details",undefined,"queue-completed");box.append(element("summary","已完成需求 · "+completed.length+" 项"));const inner=element("div",undefined,"queue-list");for(const d of completed) inner.append(draftRow(d));box.append(inner);list.append(box);}
   }
   const current=items.find(x=>x.id===editingDraft) || null;
   currentIntake=current || items.find(x=>x.status==="assessing") || legacy;updateRunTimers();
@@ -609,22 +617,49 @@ function renderDrafts(data, legacy = null) {
   const resultKey=JSON.stringify(current);if(resultKey===lastIntakeKey)return;lastIntakeKey=resultKey;
   const node=$("intakeResult");node.replaceChildren();
   $("assessIntake").disabled=draftState.busy;$("saveDraft").disabled=draftState.busy;
-  $("requirement").readOnly=draftState.busy;$("saveAnswers").disabled=current?.status!=="review"||draftState.busy;$("submitIntake").disabled=current?.status!=="review"||draftState.busy;
+  // While the agent evaluates, the requirement box is irrelevant: hide it instead of
+  // showing a read-only field that looks editable.
+  const assessing=Boolean(current && current.status==="assessing")||draftState.busy;
+  $("requirementField").hidden=assessing;
+  $("assessingHint").hidden=!assessing||!current;
+  $("requirement").readOnly=draftState.busy;
+  $("saveAnswers").disabled=current?.status!=="review"||draftState.busy;
+  $("submitIntake").disabled=current?.status!=="review"||draftState.busy;
+  $("reassessIntake").disabled=current?.status!=="review"||draftState.busy||!(current?.answers?.length);
   $("clearIntake").hidden=true;
   if(!current)return;
   if(current.error)node.append(element("p",current.error,"error-text"));
   if(!current.assessment)return;
+  let unknownsDetails=null;
   for(const [key,label] of [["title","建议标题"],["feasibility","可行性"],["plan","实施安排"],["dependencies","前置依赖"],["acceptance","验收标准"],["unknowns","未知与待确认"]]){
-    const details=element("details",undefined,"assessment-block");const summary=element("summary",label+(key==="feasibility" ? " · "+({feasible:"🟢 可行",conditional:"🟡 有条件可行",infeasible:"🔴 不可行",unknown:"⚪ 待确认"}[current.assessment.feasibilityStatus] || "⚪ 待确认") : ""));details.append(summary,element("p",(key==="dependencies"?"依赖项：":"")+current.assessment[key]));node.append(details);
+    const details=element("details",undefined,"assessment-block");
+    const summary=element("summary",label+(key==="feasibility" ? " · "+({feasible:"🟢 可行",conditional:"🟡 有条件可行",infeasible:"🔴 不可行",unknown:"⚪ 待确认"}[current.assessment.feasibilityStatus] || "⚪ 待确认") : ""));
+    if(key==="dependencies"){
+      // Show recognised task ids first, then each prerequisite as its own line.
+      const text=String(current.assessment.dependencies||"");
+      const ids=[...new Set(text.match(/TASK-\d{3,}/g)||[])];
+      const wrap=element("div",undefined,"dependency-block");
+      if(ids.length) wrap.append(element("p","识别到前置任务："+ids.join("、"),"dependency-ids"));
+      const lines=text.split(/\n+/).map(x=>x.replace(/^\s*(?:[-*•]|\d+[.、])\s*/,"").trim()).filter(Boolean);
+      const list=element("ul",undefined,"dependency-list");
+      for(const line of (lines.length?lines:["未提及明确前置依赖，提交前请人工确认。"])) list.append(element("li",line));
+      wrap.append(list);details.append(summary,wrap);details.open=true;node.append(details);continue;
+    }
+    details.append(summary,element("p",current.assessment[key]));
+    if(key==="unknowns"){unknownsDetails=details;details.open=true;}
+    node.append(details);
   }
-  const qs=draftQuestions(current.assessment);qs.forEach((q,i)=>{const field=element("fieldset",undefined,"assessment-block"),legend=element("legend",q.text);field.append(legend);for(const option of q.options){const label=element("label"),check=element("input");check.type="checkbox";check.value=option;check.checked=current.answers?.[i]?.selected?.includes(option)||false;label.append(check,document.createTextNode(" "+option));field.append(label);}const custom=element("textarea");custom.rows=2;custom.maxLength=400;custom.placeholder="补充或自填";custom.value=current.answers?.[i]?.custom||"";field.append(custom);node.append(field);field.addEventListener("input",updateAnswerButtons);field.addEventListener("change",updateAnswerButtons);});
+  if(current.answersReset) node.append(element("p","评估已更新，待确认项发生变化，请重新确认后再提交。","error-text"));
+  const qs=draftQuestions(current.assessment);qs.forEach((q,i)=>{const field=element("fieldset",undefined,"assessment-block"),legend=element("legend",q.text);field.append(legend);for(const option of q.options){const label=element("label"),check=element("input");check.type="checkbox";check.value=option;check.checked=current.answers?.[i]?.selected?.includes(option)||false;label.append(check,document.createTextNode(" "+option));field.append(label);}const custom=element("textarea");custom.rows=2;custom.maxLength=400;custom.placeholder="补充或自填";custom.value=current.answers?.[i]?.custom||"";field.append(custom);
+    // Questions live inside the unknowns block so collapsing it hides them too.
+    (unknownsDetails||node).append(field);field.addEventListener("input",updateAnswerButtons);field.addEventListener("change",updateAnswerButtons);});
   updateAnswerButtons();
   $("queueReady").checked=current.ready===true;$("intakeMilestone").value=current.milestone||"";
 }
 function openDraft(d){editingDraft=d?.id||null;$("requirement").value=d?.requirement||"";lastIntakeKey="";if(!$("intakeDialog").open)$("intakeDialog").showModal();renderDrafts(draftState);}
 async function draftAction(action,body){try{const result=await api("/api/drafts-"+action,{method:"POST",body});renderDrafts(result);return result;}catch(e){notice("操作失败："+e.message);return null;}}
 async function saveDraft(){const result=await draftAction("save",{id:editingDraft,requirement:$("requirement").value});if(result && !editingDraft)editingDraft=result.items.at(-1).id;lastIntakeKey="";if(result)renderDrafts(result);return result;}
-function updateAnswerButtons(){const complete=collectAnswers().every(a=>a.selected.length || a.custom.trim());$("saveAnswers").disabled=!complete || draftState.busy;$("submitIntake").disabled=!complete || draftState.busy;}
+function updateAnswerButtons(){const complete=collectAnswers().every(a=>a.selected.length || a.custom.trim());$("saveAnswers").disabled=!complete || draftState.busy;$("submitIntake").disabled=!complete || draftState.busy;$("reassessIntake").disabled=!complete || draftState.busy || currentIntake?.status!=="review";}
 function collectAnswers(){return [...$("intakeResult").querySelectorAll("fieldset")].map(field=>({selected:[...field.querySelectorAll('input:checked')].map(x=>x.value),custom:field.querySelector("textarea").value}));}
 async function saveDraftAnswers(){const result=await draftAction("answer",{id:editingDraft,answers:collectAnswers(),ready:$("queueReady").checked,milestone:$("intakeMilestone").value||null});return result;}
 async function mergePr(issue, pr) {
@@ -784,6 +819,13 @@ $("closeIntake").addEventListener("click",()=>$("intakeDialog").close());
 $("saveDraft").addEventListener("click",async()=>{if(await saveDraft()){$("intakeDialog").close();notice("草稿已保存。");}});
 $("assessIntake").addEventListener("click",async()=>{if(!confirm("评估会调用一次模型并可能产生费用，继续？"))return;const d=draftState.items.find(x=>x.id===editingDraft);if(!d||d.requirement!==$("requirement").value.trim()){if(!await saveDraft())return;}await draftAction("assess",{id:editingDraft});});
 $("saveAnswers").addEventListener("click",async()=>{if(await saveDraftAnswers())notice("确认结果已保存。");});
+$("reassessIntake").addEventListener("click",async()=>{
+  if(!connected)return notice("先连接本地控制台。");
+  if(!editingDraft)return notice("请先选择草稿。");
+  if(!confirm("将按已填写的待确认项重新评估可行性与实施安排，会产生一次模型调用。继续？"))return;
+  const result=await draftAction("reassess",{id:editingDraft});
+  if(result)notice("已提交重新评估；结果更新后会替换当前评估内容。");
+});
 $("submitIntake").addEventListener("click",async()=>{if(!confirm("确认提交该需求？"))return;if(!await saveDraftAnswers())return;await draftAction("batch",{ids:[editingDraft]});});
 $("batchDrafts").addEventListener("click",async()=>{const ids=[...selectedDrafts];if(!ids.length)return notice("请先选择已完成确认的草稿。");if(!confirm(`确认按队列顺序提交 ${ids.length} 项需求？`))return;const result=await draftAction("batch",{ids});if(result){selectedDrafts.clear();lastDraftKey="";renderDrafts(result);}});
 (function initializePreferences() {

@@ -608,7 +608,7 @@ export function createDashboardServer({ root = ROOT, token, bindHost = "127.0.0.
       try { return reply(200, await coordinator.snapshot()); }
       catch { return reply(503, { error: "status-unavailable" }); }
     }
-    if (request.method === "POST" && ["/api/run", "/api/stop", "/api/merge", "/api/auto-merge", "/api/update", "/api/intake-assess", "/api/intake-submit", "/api/intake-clear", "/api/drafts-save", "/api/drafts-move", "/api/drafts-remove", "/api/drafts-assess", "/api/drafts-answer", "/api/drafts-batch", "/api/drafts-resolve", "/api/advisory-run", "/api/advisory-delete", "/api/model-settings"].includes(request.url)) {
+    if (request.method === "POST" && ["/api/run", "/api/stop", "/api/merge", "/api/auto-merge", "/api/update", "/api/intake-assess", "/api/intake-submit", "/api/intake-clear", "/api/drafts-save", "/api/drafts-move", "/api/drafts-remove", "/api/drafts-assess", "/api/drafts-answer", "/api/drafts-batch", "/api/drafts-resolve", "/api/drafts-reassess", "/api/advisory-run", "/api/advisory-delete", "/api/model-settings"].includes(request.url)) {
       if (!request.headers.origin || !originAllowed(request.headers.origin) || request.headers["content-type"] !== "application/json") {
         return reply(403, { error: "invalid-request-origin" });
       }
@@ -646,6 +646,7 @@ export function createDashboardServer({ root = ROOT, token, bindHost = "127.0.0.
           else if(request.url==="/api/drafts-answer" && keys==="answers,id,milestone,ready") result=await coordinator.drafts.answer(body.id,body.answers,body.ready,body.milestone);
           else if(request.url==="/api/drafts-batch" && keys==="ids") result=await coordinator.drafts.batch(body.ids);
           else if(request.url==="/api/drafts-resolve" && keys==="created,id,url") result=await coordinator.drafts.resolve(body.id,body.created,body.url);
+          else if(request.url==="/api/drafts-reassess" && keys==="id") result=await coordinator.drafts.reassess(body.id);
           else return reply(400,{error:"invalid-body"});
           return reply(200,result);
         }

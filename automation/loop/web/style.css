@@ -49,3 +49,11 @@ dialog{width:min(680px,calc(100vw - 30px));max-height:85vh;overflow:auto;border:
 
 /* GitHub update button: keep the mark aligned with the label text. */
 .github-icon{width:14px;height:14px;margin-right:6px;vertical-align:-2px;flex:none}
+
+/* 已完成需求：默认折叠的分组 */
+.queue-completed>summary{cursor:pointer;font-weight:600;padding:6px 0}
+.queue-completed[open]>summary{margin-bottom:6px}
+/* 前置依赖：识别到的 TASK 与逐条列表 */
+.dependency-ids{margin:0 0 6px;font-family:ui-monospace,Consolas,monospace;color:var(--accent)}
+.dependency-list{margin:0;padding-left:20px}
+.dependency-list li{margin:2px 0;overflow-wrap:anywhere}

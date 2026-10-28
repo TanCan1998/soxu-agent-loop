@@ -6,6 +6,39 @@ import {tmpdir} from "node:os";
 import {join} from "node:path";
 const assessment={title:"新需求",feasibility:"可行",plan:"分步实现",dependencies:"人工核对",acceptance:"测试",unknowns:"待确认"};
 const tick=()=>new Promise(r=>setImmediate(r));
+test("submitted issue carries a machine-readable dependency line", async () => {
+  const root = await mkdtemp(join(tmpdir(), "soxu-intake-deps-"));
+  try {
+    const bodies = [];
+    const execute = async (bin, args) => {
+      const file = args[args.indexOf("--body-file") + 1];
+      bodies.push(await readFile(file, "utf8"));
+      return { stdout: "https://github.com/a/b/issues/42\n" };
+    };
+    const draft = {
+      id: "66666666-6666-4666-8666-666666666666",
+      requirement: "需要增加一个新功能",
+      ready: false,
+      milestone: "M2",
+      assessment: { ...assessment, dependencies: "依赖项：TASK-002 先合并；依赖项：TASK-001 也要先完成" },
+      answers: [{ selected: ["Windows"], custom: "" }],
+      confirmationQuestions: [{ text: "部署平台", options: ["Windows"] }],
+    };
+    const url = await submitRequirement(root, draft, execute);
+    assert.equal(url, "https://github.com/a/b/issues/42");
+    const body = bodies[0];
+    assert.match(body, /## 前置依赖（机器可读）/);
+    assert.match(body, /dependencies: \[TASK-001, TASK-002\]/);
+    assert.ok(body.indexOf("## 前置依赖（机器可读）") > body.indexOf("### 未知与待确认"), "dependency block must follow the assessment");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("dependency ids are extracted from prose and de-duplicated", async () => {
+  const { dependencyIds } = await import("../src/dashboard-intake.mjs");
+  assert.deepEqual(dependencyIds("依赖项：TASK-002 先合并；TASK-001 也要；再提一次 TASK-002"), ["TASK-001", "TASK-002"]);
+  assert.deepEqual(dependencyIds("无"), []);
+  assert.deepEqual(dependencyIds(null), []);
+});
 test("assessment requires explicit confirmation and queues only selected state",async()=>{
   const root=await mkdtemp(join(tmpdir(),"soxu-intake-test-"));
   const calls=[]; const mgr=new IntakeManager({root,assess:async()=>assessment,submit:async(root,d)=>{calls.push(d.ready);return "https://github.com/a/b/issues/99";}});
