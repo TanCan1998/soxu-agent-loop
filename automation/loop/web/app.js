@@ -165,10 +165,12 @@ function mountScrollIndicator(scroller = null) {
   let hideTimer = null;
   const sync = () => {
     // 指示条始终 fixed 定位：容器滚动时 rect 不变，滚动只改变 thumb 的偏移。
-    const rect = scroller ? scroller.getBoundingClientRect() : { top: 0, right: window.innerWidth, height: document.documentElement.clientHeight };
-    const top = scroller ? scroller.scrollTop : window.scrollY;
-    const view = scroller ? scroller.clientHeight : document.documentElement.clientHeight;
-    const total = scroller ? scroller.scrollHeight : document.documentElement.scrollHeight;
+    // 移动端 WebView 里 window.scrollY 常为 0，必须以 scrollingElement.scrollTop 为准。
+    const root = document.scrollingElement || document.documentElement;
+    const rect = scroller ? scroller.getBoundingClientRect() : { top: 0, right: window.innerWidth, height: root.clientHeight };
+    const top = scroller ? scroller.scrollTop : (root.scrollTop || window.scrollY || 0);
+    const view = scroller ? scroller.clientHeight : root.clientHeight;
+    const total = scroller ? scroller.scrollHeight : root.scrollHeight;
     const visibleArea = scroller ? rect.height : view;
     if (!Number.isFinite(view) || !Number.isFinite(total) || view <= 0) return;
     if (total <= view + 2 || visibleArea < 40) { bar.classList.remove("visible"); return; }
@@ -182,7 +184,14 @@ function mountScrollIndicator(scroller = null) {
     clearTimeout(hideTimer);
     hideTimer = setTimeout(() => bar.classList.remove("active"), 900);
   };
-  (scroller ?? window).addEventListener("scroll", sync, { passive: true });
+  if (scroller) {
+    scroller.addEventListener("scroll", sync, { passive: true });
+  } else {
+    window.addEventListener("scroll", sync, { passive: true });
+    document.addEventListener("scroll", sync, { passive: true, capture: true });
+    // 触摸滑动期间 scroll 事件可能被节流，touchmove 兜底刷新。
+    window.addEventListener("touchmove", sync, { passive: true });
+  }
   window.addEventListener("resize", sync);
   scrollIndicators.push(sync);
   sync();
