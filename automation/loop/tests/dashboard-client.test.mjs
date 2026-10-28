@@ -1037,3 +1037,36 @@ test("a click without movement does not reorder", async () => {
   assert.equal(app.requests.filter(r => r.path === "/api/drafts-reorder").length, 0, "no reorder for a 2px jitter");
 });
 
+test("created requirements expose a drag handle and a ready toggle", async () => {
+  const queue = [
+    { number: 11, title: "进行中的需求", state: "OPEN", url: null, labels: [] },
+    { number: 12, title: "已就绪的需求", state: "OPEN", url: null, labels: ["agent:ready"] },
+    { number: 13, title: "已完成的需求", state: "CLOSED", url: null, labels: [] },
+  ];
+  const snapshot = { ...STATUS, github: { status: "ok", updatedAt: null, tasks: { __queue: queue } }, drafts: { busy: false, items: [] } };
+  const app = page({ handler: () => ({ ok: true, status: 200, json: async () => snapshot }) });
+  app.elements.token.value = TOKEN;
+  app.elements.connect.dispatch("click");
+  await tick();
+
+  const rows = app.elements.queueList.children.filter(r => r.className === "queue-item");
+  assert.equal(rows.length, 3);
+  const openRows = rows.filter(r => r.getAttribute("data-issue-number") !== "13");
+  assert.ok(openRows.every(r => r.children.some(c => c.className === "drag-handle")), "open rows have a handle");
+  const closed = rows.find(r => r.getAttribute("data-issue-number") === "13");
+  assert.ok(!closed.children.some(c => c.className === "drag-handle"), "closed rows are not draggable");
+
+  const readyToggles = openRows.map(r => r.children.find(c => c.className === "queue-ready-toggle"));
+  assert.ok(readyToggles.every(Boolean), "each open row has a ready toggle");
+  assert.equal(readyToggles[1].children[0].checked, true, "existing agent:ready label shows as checked");
+
+  // 切换 ready 会调用接口
+  readyToggles[0].children[0].checked = true;
+  readyToggles[0].children[0].dispatch("change");
+  await tick();
+  const request = app.requests.find(r => r.path === "/api/queue-ready");
+  assert.ok(request, "ready toggle posts to /api/queue-ready");
+  assert.equal(JSON.parse(request.options.body).number, 11);
+  assert.equal(JSON.parse(request.options.body).ready, true);
+});
+

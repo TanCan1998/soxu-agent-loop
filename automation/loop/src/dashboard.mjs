@@ -28,6 +28,7 @@ import {
 } from "./runner-state.mjs";
 import { checkUpdate, applyUpdate as applyToolUpdate } from "./update.mjs";
 import { publishStatus, publish as publishVersion } from "./publish.mjs";
+import { readQueueOrder, writeQueueOrder, setIssueReady } from "./queue-order.mjs";
 import { loadTaskCatalog } from "./task-catalog.mjs";
 import { buildLocalRoadmap } from "./roadmap-local.mjs";
 
@@ -316,8 +317,9 @@ export class DashboardCoordinator extends EventEmitter {
       this.emit("dashboard:event", { type: "status", data: {} });
     }
   }
-  refreshGithub() {
-    if (this.githubPending || Date.now() < this.githubNext) return;
+  refreshGithub(force = false) {
+    if (this.githubPending) return;
+    if (!force && Date.now() < this.githubNext) return;
     this.githubNext = Date.now() + 60000;
     this.githubPending = Promise.resolve().then(async () => this.githubStatus(this.root, undefined, await integrationBase())).then(tasks => {
       this.github = {status:"ok", updatedAt:new Date().toISOString(), tasks};
@@ -405,6 +407,20 @@ export class DashboardCoordinator extends EventEmitter {
       log: this.lines.slice(-MAX_LOGS),
       note: "Task phase is a checkpoint, not proof of a live Pi process; controls affect only dashboard-launched jobs.",
     };
+  }
+  /** 看板上拖动排序：保存 issue 号顺序（影响展示顺序与 agent 认领顺序）。 */
+  async reorderQueue(order) {
+    if (!Array.isArray(order) || order.length > 1000) throw Object.assign(new Error("invalid-order"), { status: 400 });
+    const saved = await writeQueueOrder(this.root, order);
+    this.refreshGithub(true);
+    await this.githubPending;
+    return { order: saved };
+  }
+  /** 直接给已创建需求打/撤 agent:ready，打之前做依赖校验。 */
+  async setQueueReady(number, ready) {
+    const result = await setIssueReady(this.root, number, ready, { execute: run });
+    if (result.ok) { this.refreshGithub(true); await this.githubPending; }
+    return result;
   }
   async start(command) {
     if (!COMMANDS.has(command)) throw Object.assign(new Error("unsupported-command"), { status: 400 });
@@ -668,7 +684,7 @@ export function createDashboardServer({ root = ROOT, token, bindHost = "127.0.0.
       try { return reply(200, await coordinator.snapshot()); }
       catch { return reply(503, { error: "status-unavailable" }); }
     }
-    if (request.method === "POST" && ["/api/run", "/api/stop", "/api/merge", "/api/auto-merge", "/api/update", "/api/publish", "/api/intake-assess", "/api/intake-submit", "/api/intake-clear", "/api/drafts-save", "/api/drafts-move", "/api/drafts-reorder", "/api/drafts-ready", "/api/drafts-remove", "/api/drafts-assess", "/api/drafts-answer", "/api/drafts-batch", "/api/drafts-resolve", "/api/drafts-reassess", "/api/advisory-run", "/api/advisory-delete", "/api/model-settings"].includes(request.url)) {
+    if (request.method === "POST" && ["/api/run", "/api/stop", "/api/merge", "/api/auto-merge", "/api/update", "/api/publish", "/api/intake-assess", "/api/intake-submit", "/api/intake-clear", "/api/queue-reorder", "/api/queue-ready", "/api/drafts-save", "/api/drafts-move", "/api/drafts-reorder", "/api/drafts-ready", "/api/drafts-remove", "/api/drafts-assess", "/api/drafts-answer", "/api/drafts-batch", "/api/drafts-resolve", "/api/drafts-reassess", "/api/advisory-run", "/api/advisory-delete", "/api/model-settings"].includes(request.url)) {
       if (!request.headers.origin || !originAllowed(request.headers.origin) || request.headers["content-type"] !== "application/json") {
         return reply(403, { error: "invalid-request-origin" });
       }
@@ -707,6 +723,8 @@ export function createDashboardServer({ root = ROOT, token, bindHost = "127.0.0.
           if (!body || Object.keys(body).join(",") !== "lane" || typeof body.lane !== "string") return reply(400,{error:"invalid-body"});
           return reply(202, coordinator.advisory.start(body.lane));
         }
+        if (request.url === "/api/queue-reorder" && keys === "order") return reply(200, await coordinator.reorderQueue(body.order));
+        if (request.url === "/api/queue-ready" && keys === "number,ready") return reply(200, await coordinator.setQueueReady(body.number, body.ready === true));
         if (request.url.startsWith("/api/drafts-")) {
           if (!body || typeof body!=="object" || Array.isArray(body)) return reply(400,{error:"invalid-body"});
           const keys=Object.keys(body).sort().join(","); let result;

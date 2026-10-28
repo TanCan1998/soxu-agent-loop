@@ -7,6 +7,7 @@ import { ROOT } from "./config.mjs";
 import { validIssue } from "./guards.mjs";
 import { loadTaskCatalog, taskIdFromIssueTitle } from "./task-catalog.mjs";
 import { planGithubQueue, mergedIssueNumbers, waitingLabelDowngrades } from "./github-queue.mjs";
+import { readQueueOrder } from "./queue-order.mjs";
 
 const LABELS = ["agent:ready", "agent:waiting", "agent:in-progress", "agent:blocked", "agent:paused", "agent:pr", "agent:release"];
 export async function listIssues({promote = false, base = "main"} = {}) {
@@ -20,7 +21,7 @@ export async function listIssues({promote = false, base = "main"} = {}) {
   const merged = needsMergeEvidence
     ? JSON.parse(await gh(["pr", "list", "--state", "merged", "--limit", "1000", "--json", "body,baseRefName,mergedAt"], ROOT))
     : [];
-  const ready = planGithubQueue(values, catalog, mergedIssueNumbers(merged, base));
+  const ready = planGithubQueue(values, catalog, mergedIssueNumbers(merged, base), await readQueueOrder(ROOT));
   if (promote) {
     // A previously seeded v1.5 ready task may not have had dependency metadata honored.
     for (const issue of waitingLabelDowngrades(values, catalog, ready)) {
