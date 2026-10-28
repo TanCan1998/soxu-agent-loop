@@ -470,7 +470,8 @@ function renderTasks(data) {
     const live=Boolean(data.runner) && (data.taskPhases ?? []).some(p=>p.taskId === (data.github?.tasks?.["TASK-"+String(task.id).padStart(3,"0")]?.issue ?? task.id) && p.status === "running");
     const merged=data.github?.tasks?.["TASK-"+String(task.id).padStart(3,"0")]?.pr?.state === "merged";
     card.dataset.status=live ? "running" : ["paused","blocked"].includes(task.status) ? "paused" : merged ? "completed" : "waiting";
-    if (live) {const effect=element("div",undefined,"task-motion");effect.setAttribute("aria-hidden","true");card.append(effect);}
+    // 按状态发光：运行中脉冲，暂停/阻塞橙色微光，已完成绿色微光（waiting 不加）。
+  if (card.dataset.status !== "waiting") {const effect=element("div",undefined,"task-motion");effect.setAttribute("aria-hidden","true");card.append(effect);}
     card.append(element("div", "#" + task.id, "task-id"), element("div", task.title, "task-name"));
     const status = element("div", stateLabels[task.status] || task.status, "task-state");
     status.dataset.state = task.status;
