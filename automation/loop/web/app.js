@@ -112,9 +112,9 @@ function closeDialog(dialog) {
   // 没有 Web Animations（旧浏览器/测试环境）时直接关闭，保证状态正确。
   if (reduce || typeof dialog.animate !== "function") return done();
   const animation = dialog.animate(
-    [{ opacity: 1, transform: "translateY(0) scaleY(1)" },
-     { opacity: 0, transform: "translateY(-10px) scaleY(.94)" }],
-    { duration: 170, easing: "cubic-bezier(.4,0,1,1)", fill: "forwards" },
+    [{ opacity: 1, transform: "translateY(0) scale(1)", filter: "blur(0)" },
+     { opacity: 0, transform: "translateY(8px) scale(.98)", filter: "blur(6px)" }],
+    { duration: 200, easing: "cubic-bezier(.4,0,.6,1)", fill: "forwards" },
   );
   animation.finished.then(done, done);
 }
@@ -554,9 +554,9 @@ function render(data) {
   $("total").textContent = tasks.length;
   const blocked=tasks.filter(t=>t.status === "blocked" || t.status === "paused").length;
   $("globalRun").dataset.status=data.runner || data.externalLocks ? "running" : blocked ? "paused" : "idle";
-  $("globalRun").textContent=data.runner ? "调度运行中" : data.externalLocks ? "外部任务运行中" : blocked ? `${blocked} 项暂停 / 阻塞` : "调度空闲";
+  $("globalRun").textContent=data.runner ? "调度运行中" : blocked ? `${blocked} 项暂停 / 阻塞` : "调度空闲";
   $("badge").dataset.state = data.runner ? (data.runner.stopping ? "stopping" : "running") : data.externalLocks ? "external" : "idle";
-  $("badge").textContent = data.runner ? (data.runner.stopping ? "停止中" : "运行中") : data.externalLocks ? "外部任务执行中" : "空闲";
+  $("badge").textContent = data.runner ? (data.runner.stopping ? "停止中" : "运行中") : "空闲";
   $("runner").textContent = data.runner ? "正在执行 " + data.runner.command + " · 开始于 " + new Date(data.runner.startedAt).toLocaleTimeString()
     : data.externalLocks ? "检测到 " + data.externalLocks + " 个正在运行的工作树锁（此处不能停止）"
     : data.lastRun ? "上次执行 " + data.lastRun.command + " · 退出码 " + (data.lastRun.exitCode ?? "未知") : "未启动调度";
@@ -588,7 +588,9 @@ function render(data) {
       : "release 将开 " + (publish?.integrationBranch ?? "dev") + "→" + (publish?.releaseBranch ?? "main") + " 的 PR，等必需检查通过后合并，再打 tag";
   $("githubStatus").textContent = data.github?.status === "ok" ? "GitHub PR / CI 状态已更新 · " + new Date(data.github.updatedAt).toLocaleTimeString()
     : data.github?.status === "unavailable" ? "GitHub 状态不可用：请检查 gh 登录和网络；任务与 CI 状态未知" : "GitHub 状态加载中";
-  $("developmentLane").textContent = data.runner ? "控制台调度运行中" : data.externalLocks ? "存在外部任务锁" : "控制台当前空闲";
+  // 锁只在确有活跃锁时作为诊断附加显示，不再用它改写主状态。
+$("developmentLane").textContent = (data.runner ? "控制台调度运行中" : "控制台当前空闲")
+  + (data.externalLocks > 0 ? `（另有 ${data.externalLocks} 个任务锁）` : "");
   const reportLabel = lane => !lane ? "状态加载中" : lane.status === "unavailable" ? "本地报告状态不可用" : lane.status === "empty" ? "暂无本地建议报告" : `本地报告 ${lane.count} 份 · 最近 ${new Date(lane.lastAt).toLocaleString()}`;
   advisoryState = data.advisory ?? null;
   for (const lane of ["product","quality"]) {
@@ -830,15 +832,40 @@ function updateRunTimers() {
   }
 }
 let themeSwitchTimer = null;
+const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+/**
+ * 主题切换：优先用 View Transitions 做从主题按钮扩散的圆形转场（平滑且不闪烁），
+ * 不支持时退回到全站颜色过渡。首次应用主题不播动画。
+ */
 function setTheme(theme) {
   const root = document.documentElement;
-  // 只在用户主动切换时做过渡；首次应用主题不应播放动画。
-  if (root.dataset.theme && root.dataset.theme !== theme) {
+  const changed = Boolean(root.dataset.theme) && root.dataset.theme !== theme;
+  const apply = () => { root.dataset.theme = theme; };
+  if (changed && !prefersReducedMotion() && typeof document.startViewTransition === "function") {
+    const button = $("themeToggle");
+    const rect = button?.getBoundingClientRect?.();
+    const x = rect ? rect.left + rect.width / 2 : window.innerWidth / 2;
+    const y = rect ? rect.top + rect.height / 2 : 0;
+    const radius = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
+    const transition = document.startViewTransition(apply);
+    transition.ready.then(() => {
+      document.documentElement.animate(
+        { clipPath: ["circle(0px at " + x + "px " + y + "px)", "circle(" + radius + "px at " + x + "px " + y + "px)"] },
+        { duration: 560, easing: "cubic-bezier(.22,.61,.36,1)", pseudoElement: "::view-transition-new(root)" },
+      );
+    }).catch(() => { /* 转场失败不影响主题本身 */ });
+    themeLabelAndSave(theme);
+    return;
+  }
+  if (changed) {
     root.classList?.add("theme-switching");
     clearTimeout(themeSwitchTimer);
-    themeSwitchTimer = setTimeout(() => root.classList?.remove("theme-switching"), 380);
+    themeSwitchTimer = setTimeout(() => root.classList?.remove("theme-switching"), 620);
   }
-  root.dataset.theme = theme;
+  apply();
+  themeLabelAndSave(theme);
+}
+function themeLabelAndSave(theme) {
   const nextTheme = theme === "dark" ? "light" : "dark";
   const label = nextTheme === "light" ? "切换到浅色主题" : "切换到深色主题";
   $("themeToggle").dataset.nextTheme = nextTheme;
