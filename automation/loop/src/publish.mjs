@@ -55,17 +55,49 @@ export async function publishPreview({ execute = run, version = null } = {}) {
   return { status: "preview-published", tag, target: status.integrationBranch };
 }
 
-/** release：要求 dev 已合入 main、本地在 main 且干净，然后交给项目的受保护发布脚本。 */
+/** 三个清单的版本必须一致，否则打错 tag 会让构建失败。 */
+async function assertVersions(version) {
+  const files = ["package.json", "apps/desktop/package.json", "apps/desktop/src-tauri/tauri.conf.json"];
+  for (const file of files) {
+    const json = JSON.parse(await readFile(join(ROOT, file), "utf8"));
+    if (json.version !== version) throw fail("version-mismatch-" + file, 409, { expected: version, actual: json.version });
+  }
+}
+
+/** dev 未合入 main 时先合并：人工点击即视为审核通过，无需 autoRelease 策略。 */
+async function mergeIntegrationIntoRelease({ execute, status }) {
+  if (status.mergedIntoRelease) return "already-merged";
+  await git(execute, "fetch", "--quiet", "origin");
+  await git(execute, "merge", "--ff-only", "refs/remotes/origin/" + status.releaseBranch);
+  await git(execute, "merge", "--no-ff", "refs/remotes/origin/" + status.integrationBranch,
+    "-m", "chore(release): merge " + status.integrationBranch + " into " + status.releaseBranch);
+  await git(execute, "push", "origin", status.releaseBranch);
+  return "merged";
+}
+
+/**
+ * release：人工通道。点击即代表已人工审核，因此不受 autoRelease 限制；
+ * 若 dev 尚未合入 main，先合并，再在 main 打 tag 触发 GitHub Actions 构建。
+ */
 export async function publishRelease({ execute = run } = {}) {
   const status = await publishStatus({ execute });
   if (status.error) throw fail(status.error, 409);
-  if (!status.mergedIntoRelease)
-    throw fail(status.integrationBranch + "-not-merged-into-" + status.releaseBranch, 409, { details: status });
   if (status.head !== status.releaseBranch) throw fail("checkout-" + status.releaseBranch + "-first", 409, { details: status });
   if (!status.clean) throw fail("worktree-dirty", 409, { details: status });
-  if (!status.autoRelease) throw fail("auto-release-disabled", 409, { details: status });
-  const out = await execute(process.execPath, ["scripts/release.mjs", status.version], { cwd: ROOT, timeoutMs: 120_000 });
-  return { status: "release-tagged", tag: "v" + status.version, output: String(out.stdout ?? "").slice(-800) };
+  const merge = await mergeIntegrationIntoRelease({ execute, status });
+  await assertVersions(status.version);
+  const head = await git(execute, "rev-parse", "HEAD");
+  await assertCiGreen({ execute, branch: status.releaseBranch, sha: head });
+  const tag = "v" + status.version;
+  if ((await git(execute, "tag", "--list", tag)).trim() === tag) throw fail("tag-exists", 409, { tag });
+  await git(execute, "tag", "-a", tag, "-m", "SOXU " + tag + " release");
+  await git(execute, "push", "origin", "refs/tags/" + tag);
+  return {
+    status: "release-published", tag,
+    merge,
+    from: status.integrationBranch, to: status.releaseBranch,
+    note: "Tag pushed; GitHub Actions builds the release. Signing/notarisation still depends on configured secrets.",
+  };
 }
 
 /** 统一入口：路由与参数校验。 */

@@ -752,26 +752,35 @@ test("the token survives a reload when sessionStorage was cleared (Android brows
 });
 
 test("the publish menu gates release on dev being merged into main", async () => {
-  const notMerged = { ...STATUS, publish: { integrationBranch: "dev", releaseBranch: "main", mergedIntoRelease: false, version: "0.1.0" } };
+  const notMerged = { ...STATUS, publish: { integrationBranch: "dev", releaseBranch: "main", mergedIntoRelease: false, head: "main", clean: true, version: "0.1.0" } };
   const view = page({ handler: () => ({ ok: true, status: 200, json: async () => notMerged }) });
   view.elements.token.value = TOKEN;
   view.elements.connect.dispatch("click");
   await tick();
-  assert.equal(view.elements.publishRelease.disabled, true, "release stays locked until dev is merged");
-  assert.match(view.elements.publishHint.textContent, /release 需先把 dev 合入 main/);
-  assert.equal(view.elements.publishButton.title, "release 需先把 dev 合入 main");
+  // 人工通道：未合入也允许点击，服务端会先合并再打 tag。
+  assert.equal(view.elements.publishRelease.disabled, false, "manual release does not require a prior merge");
+  assert.match(view.elements.publishHint.textContent, /将先把 dev 合入 main/);
   view.elements.publishPreview.dispatch("click");
   await tick();
   await tick();
   const request = view.requests.find(entry => entry.path === "/api/publish");
   assert.deepEqual(JSON.parse(request.options.body), { mode: "preview" });
 
-  const merged = { ...STATUS, publish: { integrationBranch: "dev", releaseBranch: "main", mergedIntoRelease: true, version: "0.1.0" } };
+  const merged = { ...STATUS, publish: { integrationBranch: "dev", releaseBranch: "main", mergedIntoRelease: true, head: "main", clean: true, version: "0.1.0" } };
   const ready = page({ handler: () => ({ ok: true, status: 200, json: async () => merged }) });
   ready.elements.token.value = TOKEN;
   ready.elements.connect.dispatch("click");
   await tick();
   assert.equal(ready.elements.publishRelease.disabled, false);
   assert.match(ready.elements.publishHint.textContent, /已合入 main/);
+
+  // 本地不在 main 时仍应禁用，并说明原因。
+  const wrongBranch = { ...STATUS, publish: { integrationBranch: "dev", releaseBranch: "main", mergedIntoRelease: false, head: "dev", clean: true, version: "0.1.0" } };
+  const blocked = page({ handler: () => ({ ok: true, status: 200, json: async () => wrongBranch }) });
+  blocked.elements.token.value = TOKEN;
+  blocked.elements.connect.dispatch("click");
+  await tick();
+  assert.equal(blocked.elements.publishRelease.disabled, true);
+  assert.match(blocked.elements.publishHint.textContent, /切换到 main/);
 });
 
