@@ -85,7 +85,7 @@ export async function publishRelease({ execute = run, timeoutMs = 20 * 60_000, i
     let number = open[0]?.number;
     if (!number) {
       const created = await execute("gh", ["pr", "create", "--base", status.releaseBranch, "--head", status.integrationBranch,
-        "--title", "chore(release): merge " + status.integrationBranch + " into " + status.releaseBranch,
+        "--title", "🔧 chore(release): merge " + status.integrationBranch + " into " + status.releaseBranch,
         "--body", "人工触发的 release 合并：把已验证的 " + status.integrationBranch + " 合入 " + status.releaseBranch + "。合并后由发布按钮打 tag。"], { cwd: ROOT, timeoutMs: 60_000 });
       number = Number(String(created.stdout).trim().match(/\/pull\/(\d+)/)?.[1]);
       if (!Number.isInteger(number)) throw fail("pr-create-unknown", 502, { output: String(created.stdout).slice(0, 200) });
