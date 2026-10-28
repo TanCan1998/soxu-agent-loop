@@ -490,6 +490,34 @@ test("answers enable a re-assessment that posts the draft id", async () => {
   assert.deepEqual(JSON.parse(request.options.body), { id });
 });
 
+test("milestone detail falls back to local checkpoints when GitHub is unavailable", async () => {
+  const stages = [
+    { id:"M0", name:"工程治理", total:0, merged:0, running:0, paused:0, unknown:0, issues:[], items:[] },
+    { id:"M1", name:"产品原型", total:2, merged:2, running:0, paused:0, unknown:0, issues:[1,2], items:[
+      { number:1, title:"任务一", state:"CLOSED", labels:[], merged:true, url:null, localStatus:"done" },
+      { number:2, title:"任务二", state:"CLOSED", labels:[], merged:true, url:null, localStatus:"done" },
+    ] },
+  ];
+  const snapshot = { ...STATUS, github:{ status:"unavailable", updatedAt:null, tasks:{} }, roadmap:{ source:"local", stages, unclassified:0, limited:false } };
+  const app = page({ handler: () => ({ ok:true, status:200, json: async () => snapshot }) });
+  app.elements.token.value = TOKEN;
+  app.elements.connect.dispatch("click");
+  await tick();
+  const cards = app.elements.roadmapCards.children;
+  assert.equal(cards.length, 5);
+  assert.equal(cards[1].dataset.status, "completed");
+  assert.match(app.elements.projectPhaseCount.textContent, /2 \/ 2 项已合入（本地推定）/);
+  assert.match(app.elements.projectPhaseDetail.textContent, /本地检查点/);
+  cards[1].dispatch("click");
+  assert.equal(app.elements.milestoneDialog.open, true);
+  assert.equal(app.elements.milestoneTitle.textContent, "M1 · 产品原型");
+  const rows = app.elements.milestoneDetails.children;
+  assert.match(rows[0].textContent, /GitHub 暂不可用/);
+  assert.equal(rows.length, 3);
+  assert.match(rows[1].children[0].textContent, /#1 任务一/);
+  assert.equal(rows[1].children[1].textContent, "已合入");
+});
+
 test("active intake and advisory report show elapsed state",async()=>{
  const snapshot={...STATUS,intake:{status:"assessing",startedAt:new Date().toISOString()},advisory:{active:{lane:"product",startedAt:new Date().toISOString()},last:null}};
  const app=page({handler:()=>({ok:true,status:200,json:async()=>snapshot})});

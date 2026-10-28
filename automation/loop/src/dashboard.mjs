@@ -27,6 +27,8 @@ import {
   runnerCompatible, writeRunnerState, runnerLogPath,
 } from "./runner-state.mjs";
 import { checkUpdate, applyUpdate as applyToolUpdate } from "./update.mjs";
+import { loadTaskCatalog } from "./task-catalog.mjs";
+import { buildLocalRoadmap } from "./roadmap-local.mjs";
 
 export const DASHBOARD_PORT = 47321;
 // One entry point: "start" recovers paused/blocked tasks, otherwise runs the next batch.
@@ -333,6 +335,10 @@ export class DashboardCoordinator extends EventEmitter {
       generatedAt: new Date().toISOString(),
       source: "local-checkpoints",
       github,
+      // Milestone detail must not depend on GitHub: fall back to catalog + checkpoints.
+      roadmap: this.github.status === "ok" && this.github.tasks?.__roadmap
+        ? { ...this.github.tasks.__roadmap, source: "github" }
+        : buildLocalRoadmap(await loadTaskCatalog(this.root).catch(() => []), progress),
       autoMergeEnabled: this.autoMergeEnabled,
       intake: this.intake.publicState(),
       drafts: this.drafts.state(),

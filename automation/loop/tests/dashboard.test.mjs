@@ -237,6 +237,20 @@ test("report deletion enforces authentication, origin and lane-scoped filenames"
   }finally{await new Promise(resolve=>server.close(resolve));await cleanup(root,coordinator);}
 });
 
+test("snapshot falls back to a local roadmap when GitHub is unavailable", async () => {
+  const root = await fixture();
+  const coordinator = new DashboardCoordinator({ root, githubStatus: async () => { throw new Error("gh unavailable"); } });
+  try {
+    coordinator.github = { status: "unavailable", updatedAt: null, tasks: {} };
+    coordinator.githubNext = Date.now() + 60000;
+    const snapshot = await coordinator.snapshot();
+    assert.equal(snapshot.github.status, "unavailable");
+    assert.equal(snapshot.roadmap.source, "local");
+    assert.ok(Array.isArray(snapshot.roadmap.stages));
+    assert.equal(snapshot.roadmap.stages.length, 5);
+  } finally { await cleanup(root, coordinator); }
+});
+
 test("a fixed dashboard token is supported while malformed tokens stay rejected", async () => {
   const root = await fixture();
   const coordinator = new DashboardCoordinator({ root, githubStatus });
