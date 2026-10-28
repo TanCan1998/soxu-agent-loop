@@ -55,3 +55,86 @@ test('a failed reassess keeps the previous assessment available', () => fixture(
 }));
 
 test('crash during submit becomes unknown and legacy marker blocks batch',()=>fixture(async root=>{const s=new DraftStore({root,assess:async()=>a});await s.initialized;const id=(await s.save({requirement:'一个需要保存和确认的需求说明'})).items[0].id;await s.evaluate(id);await waitForIdle(s);await s.answer(id,[{selected:[],custom:'待 Windows 验证'}],false,'M1');await mkdir(join(root,'.soxu','intake'),{recursive:true});await writeFile(join(root,'.soxu','intake','pending-submit.json'),'{}');await assert.rejects(()=>s.batch([id]),/submit-unresolved/);await rm(join(root,'.soxu','intake','pending-submit.json'));s.items[0].status='submitting';await s.persist();const reload=new DraftStore({root});await reload.initialized;assert.equal(reload.state().items[0].status,'unknown');await assert.rejects(()=>reload.resolve(id,true,'https://example.com'),/invalid-url/);}));
+
+test("drafts can be reordered by dropping before another draft", async () => {
+  const { DraftStore } = await import("../src/dashboard-drafts.mjs");
+  const root = await mkdtemp(join(tmpdir(), "soxu-reorder-"));
+  try {
+    const store = new DraftStore({ root, assess: async () => ({}), submit: async () => "" });
+    await store.initialized;
+    store.items = [
+      { id: "11111111-1111-4111-8111-111111111111", requirement: "aaaaaaaaaa", status: "draft" },
+      { id: "22222222-2222-4222-8222-222222222222", requirement: "bbbbbbbbbb", status: "draft" },
+      { id: "33333333-3333-4333-8333-333333333333", requirement: "cccccccccc", status: "draft" },
+    ];
+    const [a, b, c] = store.items.map(x => x.id);
+    let state = await store.reorder(c, a);
+    assert.deepEqual(state.items.map(x => x.id), [c, a, b], "drop before first item");
+    state = await store.reorder(c, null);
+    assert.deepEqual(state.items.map(x => x.id), [a, b, c], "drop at the end");
+    state = await store.reorder(c, b);
+    assert.deepEqual(state.items.map(x => x.id), [a, c, b], "drop in the middle");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("dependency verification marks drafts blocked with the missing task ids", async () => {
+  const { verifyDependencies } = await import("../src/dashboard-drafts.mjs");
+  const root = await mkdtemp(join(tmpdir(), "soxu-deps-"));
+  try {
+    await mkdir(join(root, "tasks", "done"), { recursive: true });
+    await writeFile(join(root, "tasks", "done", "TASK-007.md"), "# done");
+    const drafts = [
+      { id: "a", assessment: { dependencies: "TASK-007" } },
+      { id: "b", assessment: { dependencies: "TASK-007、TASK-099" } },
+      { id: "c", assessment: { dependencies: "无" } },
+    ];
+    const result = await verifyDependencies(root, drafts);
+    assert.equal(result.get("a").ok, true);
+    assert.deepEqual(result.get("a").missing, []);
+    assert.equal(result.get("b").ok, false);
+    assert.deepEqual(result.get("b").missing, ["TASK-099"]);
+    assert.equal(result.get("c").ok, true);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("ready can be toggled directly from the queue", async () => {
+  const { DraftStore } = await import("../src/dashboard-drafts.mjs");
+  const root = await mkdtemp(join(tmpdir(), "soxu-ready-"));
+  try {
+    const store = new DraftStore({ root, assess: async () => ({}), submit: async () => "" });
+    await store.initialized;
+    const id = "11111111-1111-4111-8111-111111111111";
+    store.items = [{ id, requirement: "aaaaaaaaaa", status: "review", assessment: { unknowns: "无" }, answers: [] }];
+    let state = await store.setReady(id, true);
+    assert.equal(state.items[0].ready, true);
+    state = await store.setReady(id, false);
+    assert.equal(state.items[0].ready, false);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a blocked draft can be resubmitted once its dependencies are archived", async () => {
+  const { DraftStore } = await import("../src/dashboard-drafts.mjs");
+  const root = await mkdtemp(join(tmpdir(), "soxu-blocked-"));
+  try {
+    await mkdir(join(root, "tasks", "done"), { recursive: true });
+    const id = "11111111-1111-4111-8111-111111111111";
+    let submitted = 0;
+    const store = new DraftStore({ root, assess: async () => ({}), submit: async () => { submitted += 1; return "https://github.com/a/b/issues/1"; } });
+    await store.initialized;
+    store.items = [{ id, requirement: "aaaaaaaaaa", status: "blocked", ready: true,
+      assessment: { title: "T", unknowns: "无", dependencies: "TASK-099" }, answers: [], error: "依赖未满足" }];
+
+    await store.batch([id]);
+    await new Promise(r => setTimeout(r, 50));
+    assert.equal(store.items[0].status, "blocked", "still blocked while TASK-099 is missing");
+    assert.deepEqual(store.items[0].dependencyCheck.missing, ["TASK-099"]);
+    assert.equal(submitted, 0, "nothing is submitted for review");
+
+    await writeFile(join(root, "tasks", "done", "TASK-099.md"), "# done");
+    await store.batch([id]);
+    await new Promise(r => setTimeout(r, 80));
+    assert.equal(store.items[0].status, "submitted", "resubmits after the dependency lands");
+    assert.equal(submitted, 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+

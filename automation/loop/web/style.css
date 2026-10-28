@@ -273,3 +273,10 @@ html.overlay-scroll .scroll-thumb{z-index:2147483000}
 .scroll-thumb.dragging{cursor:grabbing}
 .scroll-thumb.dragging,.scroll-thumb:hover{opacity:1;background:color-mix(in srgb,var(--accent,#528fff) 85%,transparent);
   box-shadow:0 0 10px 1px color-mix(in srgb,var(--accent,#528fff) 60%,transparent),0 0 22px 4px color-mix(in srgb,var(--accent,#528fff) 22%,transparent)}
+
+/* 草稿拖动排序与队列内 ready 开关 */
+.queue-item[draggable="true"]{cursor:grab}
+.queue-item.dragging{opacity:.45;cursor:grabbing;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent,#528fff) 55%,transparent)}
+.queue-ready-toggle{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--muted);white-space:nowrap}
+.queue-warn{font-size:11px;color:#e0863b;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+[data-theme="light"] .queue-warn{color:#a35a11}

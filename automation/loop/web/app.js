@@ -990,8 +990,29 @@ function draftQuestions(a) {
 }
 /** One draft row; shared by the active list and the collapsed completed section. */
 function draftRow(d) {
-  const row=element("div",undefined,"queue-item"), label=element("label"), box=element("input");box.type="checkbox";box.checked=selectedDrafts.has(d.id);box.disabled=d.status!=="review" || !Array.isArray(d.answers) || draftState.busy;box.addEventListener("change",()=>{if(box.checked)selectedDrafts.add(d.id);else selectedDrafts.delete(d.id);});label.append(box,document.createTextNode(" "+(d.assessment?.title || d.requirement.slice(0,60))+" · "+({draft:"草稿",review:d.answers?"可提交":"待确认",assessing:"评估中",submitting:"提交中",submitted:"已提交",unknown:"结果待核实"}[d.status]||d.status)));row.append(label);
+  const row=element("div",undefined,"queue-item");
+  row.dataset.draftId = d.id;
+  row.draggable = d.status === "review"; // 仅可提交的草稿能拖动排序
+  const label=element("label"), box=element("input");box.type="checkbox";box.checked=selectedDrafts.has(d.id);box.disabled=d.status!=="review" || !Array.isArray(d.answers) || draftState.busy;box.addEventListener("change",()=>{if(box.checked)selectedDrafts.add(d.id);else selectedDrafts.delete(d.id);});label.append(box,document.createTextNode(" "+(d.assessment?.title || d.requirement.slice(0,60))+" · "+({draft:"草稿",review:d.answers?"可提交":"待确认",assessing:"评估中",submitting:"提交中",submitted:"已提交",unknown:"结果待核实"}[d.status]||d.status)));row.append(label);
   for(const [text,action,disabled] of [["编辑",()=>openDraft(d),["unknown","submitted","submitting"].includes(d.status)],["上移",()=>draftAction("move",{id:d.id,direction:-1}),false],["下移",()=>draftAction("move",{id:d.id,direction:1}),false],["删除",async()=>{if(await askConfirm("删除这个草稿？"))void draftAction("remove",{id:d.id});},d.status==="unknown"]]){const b=element("button",text);b.disabled=disabled||draftState.busy;b.addEventListener("click",action);row.append(b);}
+  // 队列内直接切换 ready，不必进弹窗
+  if(d.status==="review"){
+    const readyBox=element("input");readyBox.type="checkbox";readyBox.checked=d.ready===true;readyBox.disabled=draftState.busy;
+    readyBox.addEventListener("change",async()=>{try{await draftAction("ready",{id:d.id,ready:readyBox.checked});}catch(e){readyBox.checked=!readyBox.checked;notice("更新就绪状态失败："+e.message);}});
+    const readyTag=element("label",undefined,"queue-ready-toggle");
+    readyTag.append(readyBox,document.createTextNode(" 就绪"));
+    row.append(readyTag);
+    if(d.dependencyCheck && !d.dependencyCheck.ok && d.dependencyCheck.missing?.length)
+      row.append(element("span","依赖缺失："+d.dependencyCheck.missing.join("、"),"queue-warn"));
+  }
+  // 依赖校验未通过：给一键重试，并说明缺什么
+  if(d.status==="blocked"){
+    const retry=element("button","重新提交");retry.disabled=draftState.busy;
+    retry.addEventListener("click",async()=>{try{await draftAction("batch",{ids:[d.id]});notice("已重新提交，正在校验依赖。");}catch(e){notice("提交失败："+e.message);}});
+    row.append(retry);
+    const why=d.dependencyCheck?.missing?.length ? "依赖缺失："+d.dependencyCheck.missing.join("、") : (d.error || "依赖校验未通过");
+    row.append(element("span",why,"queue-warn"));
+  }
   if(d.status==="unknown"){const b=element("button","核实结果");b.disabled=draftState.busy;b.addEventListener("click",async()=>{const created=await askConfirm("请先在 GitHub 检查。确定已创建选择‘确定’；确认未创建选择‘取消’。");if(created){const url=await askText("输入已创建的 GitHub Issue 链接：");if(!url)return;await draftAction("resolve",{id:d.id,created:true,url});}else if(await askConfirm("确认 GitHub 中没有创建该需求，允许重新提交？"))await draftAction("resolve",{id:d.id,created:false,url:null});});row.append(b);}
   if(d.status==="submitted" && /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/.test(d.url || "")){const a=element("a","查看 Issue");a.href=d.url;a.target="_blank";a.rel="noopener noreferrer";row.append(a);}
   return row;
@@ -1312,7 +1333,40 @@ $("reassessIntake").addEventListener("click",async()=>{
   if(result)notice("已提交重新评估；结果更新后会替换当前评估内容。");
 });
 $("submitIntake").addEventListener("click",async()=>{if(!await askConfirm("确认提交该需求？"))return;if(!await saveDraftAnswers())return;await draftAction("batch",{ids:[editingDraft]});});
-$("batchDrafts").addEventListener("click",async()=>{const ids=[...selectedDrafts];if(!ids.length)return notice("请先选择已完成确认的草稿。");if(!await askConfirm(`确认按队列顺序提交 ${ids.length} 项需求？`))return;const result=await draftAction("batch",{ids});if(result){selectedDrafts.clear();lastDraftKey="";renderDrafts(result);}});
+$("batchDrafts").addEventListener("click",async()=>{const ids=[...selectedDrafts];if(!ids.length)return notice("请先选择已完成确认的草稿。");if(!await askConfirm(`确认按队列顺序提交 ${ids.length} 项需求？提交前会自动校验前置依赖。`))return;const result=await draftAction("batch",{ids});if(result){selectedDrafts.clear();lastDraftKey="";renderDrafts(result);const blocked=(result.items||[]).filter(x=>ids.includes(x.id)&&x.status==="blocked");if(blocked.length)notice("有 "+blocked.length+" 项依赖校验未通过，已标为阻塞并在列表中标出缺失项。");}});
+
+// 拖动排序：把草稿拖到另一行之前（或末尾）
+(() => {
+  const list = $("draftList");
+  let dragId = null;
+  list.addEventListener("dragstart", event => {
+    const row = event.target?.closest?.("[data-draft-id]");
+    if (!row || row.draggable !== true) { event.preventDefault?.(); return; }
+    dragId = row.dataset.draftId;
+    row.classList.add("dragging");
+    event.dataTransfer?.setData?.("text/plain", dragId);
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+  });
+  list.addEventListener("dragover", event => {
+    if (!dragId) return;
+    event.preventDefault?.();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  });
+  list.addEventListener("drop", async event => {
+    if (!dragId) return;
+    event.preventDefault?.();
+    const targetRow = event.target?.closest?.("[data-draft-id]");
+    const beforeId = targetRow && targetRow.dataset.draftId !== dragId ? targetRow.dataset.draftId : null;
+    const moved = dragId;
+    dragId = null;
+    try { const result = await draftAction("reorder", { id: moved, beforeId }); if (result) { lastDraftKey = ""; renderDrafts(result); } }
+    catch (error) { notice("排序失败：" + error.message); }
+  });
+  list.addEventListener("dragend", () => {
+    dragId = null;
+    for (const row of list.querySelectorAll?.("[data-draft-id]") ?? []) row.classList.remove("dragging");
+  });
+})();
 (function initializePreferences() {
   showPage(stored(preferenceStorage,PAGE_KEY) || "Overview");
   const theme = stored(preferenceStorage,THEME_KEY);
