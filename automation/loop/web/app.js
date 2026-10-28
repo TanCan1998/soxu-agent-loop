@@ -240,11 +240,12 @@ function updateElapsed() {
   for (const label of document.querySelectorAll(".agent-elapsed"))
     label.textContent = "运行 " + fmt(label.dataset.startedAt) + " · 当前状态 " + fmt(label.dataset.activitySince);
 }
-function showMilestoneDetail(id, name, stage, limited) {
+function showMilestoneDetail(id, name, stage, limited, source) {
   $("milestoneTitle").textContent = id + " · " + name;
   const list=$("milestoneDetails"); list.replaceChildren();
+  if (source === "local") list.append(element("p","GitHub 暂不可用，以下明细来自本地检查点与任务文件；合入状态可能滞后，请在 GitHub 复核。","hint"));
   if (limited) list.append(element("p","GitHub 查询达到上限，以下明细可能不完整。","hint"));
-  if (!stage || !Array.isArray(stage.items)) list.append(element("p","明细暂不可用，请检查 GitHub 连接。","hint"));
+  if (!stage || !Array.isArray(stage.items)) list.append(element("p","暂无里程碑明细：GitHub 与本地检查点都没有可归类任务。","hint"));
   else if (!stage.items.length) list.append(element("p","该里程碑暂无已归类任务。","hint"));
   else for (const item of stage.items) {
     const row=element("div",undefined,"milestone-detail-row");
@@ -257,7 +258,8 @@ function showMilestoneDetail(id, name, stage, limited) {
 }
 function renderProjectPhase(github, data) {
   const names={M0:"工程治理",M1:"产品原型",M2:"多 Agent",M3:"开发工具",M4:"交付发布"};
-  const roadmap=github?.status === "ok" ? github.tasks?.__roadmap : null;
+  // GitHub 不可用时退回本地检查点推出的路线图，避免整块变成"待核实"。
+  const roadmap=github?.status === "ok" ? github.tasks?.__roadmap : (data.roadmap ?? null);
   const key=JSON.stringify([roadmap,Boolean(data.runner),data.taskPhases]);
   if(key===lastRoadmapKey)return;
   lastRoadmapKey=key;
@@ -273,7 +275,7 @@ function renderProjectPhase(github, data) {
     if(!unknown){total+=stage.total;merged+=stage.merged;}
     const card=element("article",undefined,"milestone-card");card.dataset.status=state;
     card.setAttribute("role","button");card.setAttribute("tabindex","0");card.setAttribute("aria-label",id+" · "+names[id]+"，查看任务明细");
-    const show=()=>showMilestoneDetail(id,names[id],stage,Boolean(roadmap?.limited));
+    const show=()=>showMilestoneDetail(id,names[id],stage,Boolean(roadmap?.limited),roadmap?.source);
     card.addEventListener("click",show);card.addEventListener("keydown",event=>{if(event.key==="Enter" || event.key===" "){event.preventDefault();show();}});
     const labels={unknown:"待核实",running:"进行中",paused:"暂停 / 阻塞",completed:"任务已合入 · 验收待确认",waiting:"等待推进"};
     const head=element("div",undefined,"milestone-heading");head.append(element("strong",id+" · "+names[id]),element("span",labels[state],"milestone-state"));card.append(head);
@@ -285,9 +287,10 @@ function renderProjectPhase(github, data) {
     card.append(element("small",unknown ? "暂无完整的归类与合并证据" : `${stage.merged} / ${stage.total} 项已合入`+(stage.unknown ? ` · ${stage.unknown} 项完成证据待核实` : ""),"hint"));
     node.append(card);
   }
+  const local = roadmap?.source === "local";
   $("projectPhaseTitle").textContent=!roadmap ? "项目里程碑状态待核实" : running ? `${running} 个里程碑正在推进` : paused ? `${paused} 个里程碑有暂停或阻塞任务` : "已归类里程碑当前无活跃任务";
-  $("projectPhaseCount").textContent=roadmap && !roadmap.limited ? `${merged} / ${total} 项已合入` : "—";
-  $("projectPhaseDetail").textContent=!roadmap ? "GitHub 状态不可用，无法判断里程碑进度。" : roadmap.limited ? "GitHub 查询达到上限，进度待核实。" : `按任务元数据或 GitHub 里程碑自动归类；未归类 ${roadmap.unclassified} 项。运行状态基于控制台活动，数据可能有延迟。`;
+  $("projectPhaseCount").textContent=roadmap && !roadmap.limited ? `${merged} / ${total} 项已合入${local ? "（本地推定）" : ""}` : "—";
+  $("projectPhaseDetail").textContent=!roadmap ? "GitHub 与本地检查点都没有可用的里程碑数据。" : roadmap.limited ? "GitHub 查询达到上限，进度待核实。" : local ? `GitHub 暂不可用，以上按本地检查点与任务文件推定；未归类 ${roadmap.unclassified} 项。合入与验收仍需在 GitHub 复核。` : `按任务元数据或 GitHub 里程碑自动归类；未归类 ${roadmap.unclassified} 项。运行状态基于控制台活动，数据可能有延迟。`;
 }
 
 function render(data) {
