@@ -11,7 +11,9 @@
 /* GPT（ChatGPT）深色：中性灰阶，无暖色偏。 */
 [data-theme="dark"]{--surface:#212121;--panel:#2f2f2f;--subtle:#2a2a2a;--text:#ececec;--muted:#b4b4b4;--border:#3f3f3f;--accent:#3b82f6;--select:#3a3a3a;color-scheme:dark}
 :root{background:var(--surface);color:var(--text)}.top{border-color:var(--border)}.brand span,.connection,.hint,.subtle,.notice,.task-time,.task-stage{color:var(--muted)}.panel,.stat{background:var(--panel);border-color:var(--border)}.task,.agent-card{background:var(--subtle);border-color:var(--border)}button{background:var(--subtle);color:var(--text);border-color:var(--border)}.primary,.inline button{background:var(--accent);border-color:var(--accent);color:#fff}.eyebrow,.task-id{color:var(--accent)}.inline input,textarea,.log-settings select{background:var(--surface);color:var(--text);border:1px solid var(--border)}.logs{background:var(--subtle)}.log{color:var(--text)}.status-pill{background:var(--select);border-color:var(--accent);color:var(--text);font-weight:650}.task-state[data-state=running]{color:var(--accent);font-weight:700}.task-state[data-state=blocked]{color:#c75832;font-weight:700}.task-state[data-state=done]{color:#25845d;font-weight:650}.theme-toggle{padding:6px 12px}.pr-link{color:var(--accent)}
-dialog{width:min(680px,calc(100vw - 30px));max-height:85vh;overflow:auto;border:1px solid var(--border);border-radius:18px;background:var(--panel);color:var(--text);padding:24px;box-shadow:0 24px 80px #0004}dialog::backdrop{background:#1119}.dialog-head{display:flex;justify-content:space-between;align-items:start;gap:20px}dialog label{display:block;margin:18px 0 8px;font-weight:600}textarea{width:100%;border-radius:10px;padding:12px;resize:vertical;font:inherit}dialog .actions{margin:12px 0}.assessment-block{border-bottom:1px solid var(--border);padding:10px 0}.assessment-block p{white-space:pre-wrap;color:var(--muted);margin:6px 0}.queue-choice{display:flex;gap:8px;align-items:center}.error-text{color:#c75832}.task-detail{color:var(--muted)}.stat,.panel,.task,button{transition:background .2s ease,border-color .2s ease,transform .2s ease}.task:hover{transform:translateY(-2px)}.dot.ok{box-shadow:0 0 0 4px #3a83f71f}.status-pill{transition:background .2s ease,color .2s ease}@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
+/* 弹窗不要外部投影：大模糊阴影在浅色背板上会形成一圈灰色半透明"外框"。
+   层次改由 1px 描边 + 极淡内高光提供。 */
+dialog{width:min(680px,calc(100vw - 30px));max-height:85vh;overflow:auto;border:1px solid var(--border);border-radius:18px;background:var(--panel);color:var(--text);padding:24px;box-shadow:none}dialog::backdrop{background:#1119}.dialog-head{display:flex;justify-content:space-between;align-items:start;gap:20px}dialog label{display:block;margin:18px 0 8px;font-weight:600}textarea{width:100%;border-radius:10px;padding:12px;resize:vertical;font:inherit}dialog .actions{margin:12px 0}.assessment-block{border-bottom:1px solid var(--border);padding:10px 0}.assessment-block p{white-space:pre-wrap;color:var(--muted);margin:6px 0}.queue-choice{display:flex;gap:8px;align-items:center}.error-text{color:#c75832}.task-detail{color:var(--muted)}.stat,.panel,.task,button{transition:background .2s ease,border-color .2s ease,transform .2s ease}.task:hover{transform:translateY(-2px)}.dot.ok{box-shadow:0 0 0 4px #3a83f71f}.status-pill{transition:background .2s ease,color .2s ease}@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
 
 .project-progress{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:20px 22px;margin-bottom:18px;background:var(--panel);border:1px solid var(--border);border-radius:15px}.project-count{color:var(--accent);font-weight:700;font-variant-numeric:tabular-nums}.progress-track{grid-column:1/-1;height:6px;background:var(--subtle);border-radius:99px;overflow:hidden}.progress-track span{display:block;height:100%;width:0;background:var(--accent);border-radius:99px;transition:width .4s ease}
 
@@ -87,11 +89,13 @@ dialog{width:min(680px,calc(100vw - 30px));max-height:85vh;overflow:auto;border:
 /* 模态定位显式声明：部分环境下 UA 的 dialog:modal{position:fixed;margin:auto} 不生效，
    弹窗会掉到文档底部。这里直接写死居中，跨环境一致。 */
 dialog[open]{position:fixed;inset:0;margin:auto;height:fit-content;z-index:2147483000}
+/* 两个主题都不投外影，只用内描边区分层次。 */
+[data-theme="dark"] dialog[open]{box-shadow:inset 0 1px 0 #ffffff0f}
+[data-theme="light"] dialog[open]{box-shadow:inset 0 1px 0 #ffffff}
 /* 弹窗：上下展开 + 淡入；关闭时立即收起（原生 dialog 关闭无法动画，故只做进场） */
 dialog[open]{animation:dialog-unroll .38s cubic-bezier(.22,.85,.3,1)}
-/* 不用 backdrop-filter：部分 WebView/旧内核会把背板提升为独立合成层，
-   导致页面内容盖到弹窗之上。改用更深的纯色背板。 */
-dialog[open]::backdrop{animation:backdrop-fade .34s ease-out;background:#000000a6}
+/* 背板模糊：底色降低不透明度让模糊可见；弹窗 z-index 极高，避免合成层遮挡 */
+dialog[open]::backdrop{animation:backdrop-fade .34s ease-out;background:#00000066;backdrop-filter:blur(10px) saturate(1.1);-webkit-backdrop-filter:blur(10px) saturate(1.1)}
 /* 书卷式展开：从中线向上下同时铺开（clip-path inset），配合轻微去模糊。
    clip-path 不缩放内容，比 scale/scaleY 更像卷轴展开而非缩放。 */
 @keyframes dialog-unroll{
@@ -257,3 +261,8 @@ html.theme-switching,html.theme-switching *,html.theme-switching *::before,html.
 ::view-transition-old(root),::view-transition-new(root){animation:none;mix-blend-mode:normal}
 ::view-transition-old(root){z-index:1}
 ::view-transition-new(root){z-index:2}
+
+/* overlay 滚动条环境：原生滚动条会盖住自绘指示条，直接隐藏（该环境本就忽略 ::-webkit-scrollbar 样式） */
+html.overlay-scroll{scrollbar-width:none}
+html.overlay-scroll ::-webkit-scrollbar,html.overlay-scroll ::-webkit-scrollbar-thumb{width:0;height:0;display:none}
+html.overlay-scroll .scroll-thumb{z-index:2147483000}
