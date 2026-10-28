@@ -6,7 +6,7 @@ import { readCheckpoint, writeCheckpoint } from "./checkpoint.mjs";
 const samePath = (a,b) => process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 
 // Cleanup is restricted to Runner-owned GitHub tasks with an exact merged PR head.
-export async function cleanupMergedTasks(root, { execute=run, log=console.log, signal }={}) {
+export async function cleanupMergedTasks(root, { execute=run, log=console.log, signal, base = "main" }={}) {
   const checkpointDir=join(dataRoot(root),"checkpoints"), lockDir=join(root,".soxu","locks");
   let files;try { files=await readdir(checkpointDir); } catch(e) {if(e.code==="ENOENT")return [];throw e;}
   const ids=[...new Set(files.map(x=>/^(?:github-)?issue-(\d+)\.json$/.exec(x)?.[1]).filter(Boolean))];
@@ -37,7 +37,7 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
       const pushMatch=/^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(pushOrigin);
       if(!originMatch || !pushMatch || originMatch[1].toLowerCase()!==repo.toLowerCase() || pushMatch[1].toLowerCase()!==repo.toLowerCase()) throw Error("origin-mismatch");
       const pr=JSON.parse((await exec("gh",["pr","view",state.pr,"--json","state,mergedAt,baseRefName,headRefName,headRefOid,isCrossRepository"])).stdout);
-      if(pr.state!=="MERGED" || !pr.mergedAt || pr.baseRefName!=="main" || pr.headRefName!==branch || pr.headRefOid!==sha || pr.isCrossRepository!==false) {results.push({issue:n,status:"not-verified"});continue;}
+      if(pr.state!=="MERGED" || !pr.mergedAt || pr.baseRefName!==base || pr.headRefName!==branch || pr.headRefOid!==sha || pr.isCrossRepository!==false) {results.push({issue:n,status:"not-verified"});continue;}
       const remote=(await exec("git",["ls-remote","--heads","origin",`refs/heads/${branch}`])).stdout.trim();
       let remoteStatus="absent";
       if(remote){if(remote!==`${sha}\trefs/heads/${branch}`) remoteStatus="changed";

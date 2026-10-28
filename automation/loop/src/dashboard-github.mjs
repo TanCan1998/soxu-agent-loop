@@ -9,7 +9,7 @@ function safePrUrl(value, number) {
 function safeIssueUrl(value, number) {
   try { const url=new URL(value); return url.protocol === "https:" && url.hostname === "github.com" && new RegExp(`^/[^/]+/[^/]+/issues/${number}$`).test(url.pathname) && !url.search && !url.hash ? url.href : null; } catch {return null;}
 }
-export function buildGithubStatus(catalog, issues, prs) {
+export function buildGithubStatus(catalog, issues, prs, base = "main") {
   const byTask = new Map();
   for (const issue of issues) {
     const id = taskIdFromIssueTitle(issue.title);
@@ -17,7 +17,7 @@ export function buildGithubStatus(catalog, issues, prs) {
     if (byTask.has(id)) throw new Error("Duplicate task issue");
     byTask.set(id, issue);
   }
-  const merged = mergedIssueNumbers(prs);
+  const merged = mergedIssueNumbers(prs, base);
   const completed = new Set(catalog.filter(t => {
     const issue = byTask.get(t.id);
     return issue?.state === "CLOSED" && merged.has(issue.number);
@@ -77,13 +77,13 @@ export function buildGithubStatus(catalog, issues, prs) {
   return tasks;
 }
 function validTime(value) { return typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : null; }
-export async function readGithubStatus(root, execute = run) {
+export async function readGithubStatus(root, execute = run, base = "main") {
   const [catalog, issues, prs] = await Promise.all([
     loadTaskCatalog(root),
     execute("gh", ["issue", "list", "--state", "all", "--limit", "1000", "--json", "number,title,state,labels,url,milestone"], {cwd:root, timeoutMs:15000}),
     execute("gh", ["pr", "list", "--state", "all", "--limit", "1000", "--json", "number,title,url,state,body,baseRefName,mergedAt,statusCheckRollup"], {cwd:root, timeoutMs:15000}),
   ]);
-  const snapshot = buildGithubStatus(catalog, JSON.parse(issues.stdout), JSON.parse(prs.stdout));
+  const snapshot = buildGithubStatus(catalog, JSON.parse(issues.stdout), JSON.parse(prs.stdout), base);
   await enrichActiveChecks(snapshot, root, execute);
   return snapshot;
 }

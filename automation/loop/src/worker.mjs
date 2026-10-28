@@ -1,6 +1,6 @@
 import { open, readFile, rm, mkdir, stat, realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { ROOT } from "./config.mjs";
+import { ROOT, integrationBase } from "./config.mjs";
 import { git, run } from "./process.mjs";
 import { runPi, parseReview } from "./rpc.mjs";
 import { createPiActivityReporter } from "./dashboard-activity.mjs";
@@ -49,7 +49,7 @@ async function acquire(issueId, local) {
   return async () => rm(path, { force: true });
 }
 
-async function worktreeFor(issue, local, state) {
+async function worktreeFor(issue, local, state, base = "main") {
   if (state.directory) {
     // Never trust a recovered JSON path to point outside the managed worktree root.
     if (!resolve(state.directory).startsWith(WORKTREES + (process.platform === "win32" ? "\\" : "/"))) throw new Error("Saved Worktree path outside managed directory");
@@ -62,12 +62,12 @@ async function worktreeFor(issue, local, state) {
   await mkdir(WORKTREES, { recursive: true });
   const branch = `agent/${local ? "local" : "github"}-issue-${issue.number}-${slug(issue.title)}`;
   const directory = join(WORKTREES, `${local ? "local" : "github"}-issue-${issue.number}-${slug(issue.title)}`);
-  if (!local) await git(["fetch", "origin", "main"], ROOT);
+  if (!local) await git(["fetch", "origin", base], ROOT);
   // The branch and path might exist after an interruption between git and checkpoint write.
   try { await stat(directory); }
   catch (err) {
     if (err.code !== "ENOENT") throw err;
-    await git(["worktree", "add", "-b", branch, directory, local ? "main" : "origin/main"], ROOT);
+    await git(["worktree", "add", "-b", branch, directory, local ? base : "origin/" + base], ROOT);
   }
   const foundBranch = await git(["branch", "--show-current"], directory);
   if (foundBranch !== branch) throw new Error("Worktree already exists but belongs to another branch");
@@ -131,7 +131,8 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
     await writeCheckpoint(state);
     reportTaskPhase(issue.number, state.phase);
     if (!local) await labelIssue(issue.number, "agent:in-progress", resume ? (oldStatus === "paused" ? "agent:paused" : oldStatus === "blocked" ? "agent:blocked" : null) : "agent:ready");
-    const wt = await worktreeFor(issue, local, state);
+    const base = await integrationBase();
+    const wt = await worktreeFor(issue, local, state, base);
     state.branch = wt.branch; state.directory = wt.directory;
     state.base ??= await git(["rev-parse", "HEAD"], wt.directory);
     if (state.phase === "worktree") state.phase = "install";
@@ -174,20 +175,20 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
             // Recheck before every paid Developer call, including resume/repair.
             let prs;
             try {
-              const result = await run("gh", ["pr", "list", "--state", "open", "--base", "main", "--limit", "1000", "--json", "number,title,state,body,url,headRefName,baseRefName"], {cwd:ROOT, timeoutMs:policy.timeouts.networkSeconds * 1000, signal});
+              const result = await run("gh", ["pr", "list", "--state", "open", "--base", base, "--limit", "1000", "--json", "number,title,state,body,url,headRefName,baseRefName"], {cwd:ROOT, timeoutMs:policy.timeouts.networkSeconds * 1000, signal});
               prs = JSON.parse(result.stdout);
               if (!Array.isArray(prs) || prs.length >= 1000) throw new Error("PR results incomplete");
             } catch (error) {
               throw new LoopFailure("network", "Cannot verify open PRs before model call; task paused. Check GitHub access and retry explicitly.", error);
             }
-            const duplicates = duplicatePrs(issue.number, prs);
+            const duplicates = duplicatePrs(issue.number, prs, base);
             if (duplicates.length) {
               throw new LoopFailure("duplicate", `Existing open PR(s) explicitly reference Issue #${issue.number}: ${duplicates.map(pr => `#${pr.number}`).join(", ")}. Inspect before resuming.`);
             }
             // Explicitly resuming a blocked candidate acknowledges the advisory;
             // exact Issue references above remain blocking.
             if (!(resume && allowBlocked && oldStatus === "blocked" && state.reason === "possible-duplicate")) {
-              const candidates = similarPrs(issue.title, prs);
+              const candidates = similarPrs(issue.title, prs, base);
               if (candidates.length) {
                 const evidence = candidates.map(p => `#${p.number} (${p.matched.join(", ")})`).join("; ");
                 throw new LoopFailure("possible-duplicate", `Possible overlapping open PRs: ${evidence}. Review before explicitly resuming the blocked task.`);
@@ -301,7 +302,7 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
           // Network could fail after remote created the PR. Check before creating another.
           const existing = await run("gh", ["pr", "list", "--head", state.branch, "--state", "all", "--json", "url", "--limit", "1"], { cwd: ROOT, timeoutMs: policy.timeouts.networkSeconds * 1000 });
           const rows = JSON.parse(existing.stdout);
-          state.pr = rows[0]?.url || await createPr(issue.number, state.branch, state.summary);
+          state.pr = rows[0]?.url || await createPr(issue.number, state.branch, state.summary, base);
           await checkpoint("merge"); break;
         }
         case "merge":

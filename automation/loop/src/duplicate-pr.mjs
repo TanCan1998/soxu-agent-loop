@@ -1,10 +1,10 @@
 // PR data is untrusted. Only explicit closing references and known task branches
 // are treated as evidence; semantic similarity needs human review.
-export function duplicatePrs(issueNumber, prs) {
+export function duplicatePrs(issueNumber, prs, base = "main") {
   if (!Number.isSafeInteger(issueNumber) || issueNumber < 1 || !Array.isArray(prs)) throw new Error("Invalid duplicate PR input");
   const close = new RegExp(String.raw`\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#${issueNumber}\b`, "i");
   const branch = new RegExp(`^agent/(?:github-issue-|issue-)${issueNumber}-`);
-  return prs.filter(p => p?.state === "OPEN" && p.baseRefName === "main" &&
+  return prs.filter(p => p?.state === "OPEN" && p.baseRefName === base &&
     (close.test(String(p.body ?? "")) || branch.test(String(p.headRefName ?? ""))))
     .map(p => ({number:p.number, url:p.url})).filter(p => Number.isSafeInteger(p.number) && p.number > 0);
 }
@@ -22,10 +22,10 @@ function terms(value) {
   return result;
 }
 // High-confidence lexical signal only; candidates are not declared duplicates.
-export function similarPrs(issueTitle, prs) {
+export function similarPrs(issueTitle, prs, base = "main") {
   if (!Array.isArray(prs)) throw new Error("Invalid PR results");
   const issueTerms = terms(issueTitle);
-  return prs.filter(p => p?.state === "OPEN" && p.baseRefName === "main" && Number.isSafeInteger(p.number) && p.number > 0)
+  return prs.filter(p => p?.state === "OPEN" && p.baseRefName === base && Number.isSafeInteger(p.number) && p.number > 0)
     .map(p => {
       const matched = [...terms(p.title)].filter(t => issueTerms.has(t));
       return { number:p.number, title:String(p.title ?? "").slice(0, 120), matched };

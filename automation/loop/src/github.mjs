@@ -9,7 +9,7 @@ import { loadTaskCatalog, taskIdFromIssueTitle } from "./task-catalog.mjs";
 import { planGithubQueue, mergedIssueNumbers, waitingLabelDowngrades } from "./github-queue.mjs";
 
 const LABELS = ["agent:ready", "agent:waiting", "agent:in-progress", "agent:blocked", "agent:paused", "agent:pr", "agent:release"];
-export async function listIssues({promote = false} = {}) {
+export async function listIssues({promote = false, base = "main"} = {}) {
   // Both open and closed TASK issues are needed; a PR being created is NOT a merged dependency.
   const text = await gh(["issue", "list", "--state", "all", "--limit", "1000", "--json", "number,title,body,labels,state"], ROOT);
   const values = JSON.parse(text).filter(validIssue);
@@ -20,7 +20,7 @@ export async function listIssues({promote = false} = {}) {
   const merged = needsMergeEvidence
     ? JSON.parse(await gh(["pr", "list", "--state", "merged", "--limit", "1000", "--json", "body,baseRefName,mergedAt"], ROOT))
     : [];
-  const ready = planGithubQueue(values, catalog, mergedIssueNumbers(merged));
+  const ready = planGithubQueue(values, catalog, mergedIssueNumbers(merged, base));
   if (promote) {
     // A previously seeded v1.5 ready task may not have had dependency metadata honored.
     for (const issue of waitingLabelDowngrades(values, catalog, ready)) {
@@ -41,12 +41,12 @@ export async function commentIssue(n, message) {
   try { const p = join(dir, "comment.md"); await writeFile(p, message); await gh(["issue", "comment", String(n), "--body-file", p], ROOT); }
   finally { await rm(dir, { recursive: true, force: true }); }
 }
-export async function createPr(n, branch, summary) {
+export async function createPr(n, branch, summary, base = "main") {
   const dir = await mkdtemp(join(tmpdir(), "soxu-"));
   try {
     const p = join(dir, "body.md");
     await writeFile(p, `Autonomous SOXU change for #${n}.\n\n${summary}\n\nCloses #${n}\n`);
-    return await gh(["pr", "create", "--base", "main", "--head", branch, "--title", `[agent] ${branch}`, "--body-file", p], ROOT);
+    return await gh(["pr", "create", "--base", base, "--head", branch, "--title", `[agent] ${branch}`, "--body-file", p], ROOT);
   } finally { await rm(dir, { recursive: true, force: true }); }
 }
 export async function branchProtectionEnabled() {

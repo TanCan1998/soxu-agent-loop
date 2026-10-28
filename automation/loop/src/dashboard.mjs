@@ -6,7 +6,7 @@ import { networkInterfaces } from "node:os";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
-import { ROOT, TOOL_ROOT } from "./config.mjs";
+import { ROOT, TOOL_ROOT, integrationBase } from "./config.mjs";
 import { readCheckpoint } from "./checkpoint.mjs";
 import { localProgress } from "./status.mjs";
 import { safeActivity } from "./dashboard-activity.mjs";
@@ -287,7 +287,7 @@ export class DashboardCoordinator extends EventEmitter {
   refreshGithub() {
     if (this.githubPending || Date.now() < this.githubNext) return;
     this.githubNext = Date.now() + 60000;
-    this.githubPending = Promise.resolve().then(() => this.githubStatus(this.root)).then(tasks => {
+    this.githubPending = Promise.resolve().then(async () => this.githubStatus(this.root, undefined, await integrationBase())).then(tasks => {
       this.github = {status:"ok", updatedAt:new Date().toISOString(), tasks};
     }).catch(() => {
       this.github = {status:"unavailable", updatedAt:null, tasks:{}};
@@ -302,7 +302,7 @@ export class DashboardCoordinator extends EventEmitter {
   refreshCleanup() {
     if(this.cleanupController.signal.aborted || this.cleanupPending || Date.now()<this.cleanupNext)return;
     this.cleanupNext=Date.now()+60000;
-    this.cleanupPending=cleanupMergedTasks(this.root,{signal:this.cleanupController.signal,log:message=>this.push(message)}).catch(e=>this.push(`Merged cleanup unavailable: ${e.message}`)).finally(()=>{this.cleanupPending=null;});
+    this.cleanupPending=Promise.resolve(integrationBase()).then(base=>cleanupMergedTasks(this.root,{signal:this.cleanupController.signal,log:message=>this.push(message),base})).catch(e=>this.push(`Merged cleanup unavailable: ${e.message}`)).finally(()=>{this.cleanupPending=null;});
   }
   async snapshot() {
     this.refreshCleanup();
@@ -454,7 +454,7 @@ export class DashboardCoordinator extends EventEmitter {
       if (await liveExternalLocks(this.root)) throw Object.assign(new Error("external-runner-active"), {status:409});
       const found = Object.values(this.github.tasks).some(t => t.issue === issue && t.pr?.number === pr && t.pr.state === "open");
       if (this.github.status !== "ok" || !found) throw Object.assign(new Error("pr-not-listed"), {status:409});
-      const result = await this.mergePr(this.root, issue, pr);
+      const result = await this.mergePr(this.root, issue, pr, undefined, await integrationBase());
       this.push(`PR #${pr} merged; remote branch ${result.branchDeleted ? "deleted" : "not deleted"}`);
       this.cleanupNext=0;this.refreshCleanup();
       this.githubNext = 0; this.refreshGithub();
