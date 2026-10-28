@@ -134,7 +134,8 @@ async function once() {
   if (!local && !dryRun) await cleanup();
   if (!dryRun) await verifyLockfiles();
   const available = await issues();
-  if (!available.length) { console.log("No eligible tasks"); return []; }
+  // Callers report the outcome once; printing here duplicated start()'s message.
+  if (!available.length) return [];
   if (dryRun) { for (const issue of available.slice(0, p.maxConcurrentAgents)) console.log(`would run #${issue.number}: ${issue.title}`); return []; }
   return Promise.all(available.slice(0, p.maxConcurrentAgents).map(issue => processIssue(issue, { policy: p, local, signal: controller.signal })));
 }
