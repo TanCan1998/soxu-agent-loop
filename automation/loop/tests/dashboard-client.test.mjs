@@ -28,6 +28,7 @@ function node() {
     classList: { add() {}, remove() {}, contains(value) { return result.className.split(" ").includes(value); } },
     showModal() {result.open=true;}, close() {result.open=false;},
     addEventListener(type, fn) { listeners.set(type, fn); },
+    removeEventListener(type) { listeners.delete(type); },
     dispatch(type, event = {}) { listeners.get(type)?.(event); },
     get children() { return children; },
     get lastElementChild() { return children.at(-1); },
@@ -42,11 +43,12 @@ function node() {
   };
   return result;
 }
-function page({ storage = new Map(), handler = () => response(), hidden = false, preferences = new Map(), streamSupport = false, navigatorClipboard, execCommand = () => false, secureContext } = {}) {
+function page({ storage = new Map(), handler = () => response(), hidden = false, preferences = new Map(), streamSupport = false, navigatorClipboard, execCommand = () => false, secureContext, confirmResult = true, promptResult = null } = {}) {
   const ids = [
     "milestoneDialog", "milestoneTitle", "milestoneDetails", "closeMilestone", "token", "tokenLabel", "authPanel", "authNotice", "connect", "notice", "connection", "dot", "globalRun", "running", "pending", "done",
     "total", "badge", "runner", "updated", "stop", "tasks", "logs", "refresh", "copyLogs", "intakeRunState", "productReports", "productCopy", "productDelete", "productClear", "qualityReports", "qualityCopy", "qualityDelete", "qualityClear",
-    "navOverview", "navExecution", "navMonitor", "navRequirements", "navLanes", "navModels", "pageOverview", "pageExecution", "pageMonitor", "pageRequirements", "pageLanes", "pageModels", "modelSummary", "openModels", "closeModels", "reloadModels", "saveModels", "modelScope", "modelSearch", "modelInherit", "modelDialog", "modelGroups", "modelMessage", "logLimit", "logFilter", "followLogs", "logCount", "agentCards", "githubStatus", "autoMerge", "updateStatus", "updateTool", "taskFilters", "draftFilters", "milestoneFilters", "projectPhaseTasks", "projectPhaseTitle", "projectPhaseDetail", "projectPhaseCount", "roadmapCards", "developmentLane", "productLane", "qualityLane", "lessonsStatus", "openProduct", "openQuality", "productDialog", "qualityDialog", "closeProduct", "closeQuality", "runProduct", "runQuality", "productRunState", "qualityRunState", "productReport", "qualityReport", "projectProgress", "projectProgressFill", "themeToggle", "openIntake", "intakeDialog", "intakeSummary", "queueList", "closeIntake", "requirement", "assessIntake", "intakeResult", "queueReady", "intakeMilestone", "submitIntake", "clearIntake", "draftList", "batchDrafts", "saveDraft", "saveAnswers", "requirementField", "assessingHint", "reassessIntake",
+    "navOverview", "navExecution", "navMonitor", "navRequirements", "navLanes", "navModels", "pageOverview", "pageExecution", "pageMonitor", "pageRequirements", "pageLanes", "pageModels", "modelSummary", "openModels", "closeModels", "reloadModels", "saveModels", "modelScope", "modelSearch", "modelInherit", "modelDialog", "modelGroups", "modelMessage", "logLimit", "logFilter", "followLogs", "logCount", "agentCards", "githubStatus", "autoMerge", "updateStatus", "updateTool", "taskFilters", "draftFilters", "milestoneFilters", "projectPhaseTasks",
+    "confirmDialog", "confirmTitle", "confirmMessage", "confirmInputLabel", "confirmInput", "confirmAccept", "confirmCancel", "confirmCancelTop", "projectPhaseTitle", "projectPhaseDetail", "projectPhaseCount", "roadmapCards", "developmentLane", "productLane", "qualityLane", "lessonsStatus", "openProduct", "openQuality", "productDialog", "qualityDialog", "closeProduct", "closeQuality", "runProduct", "runQuality", "productRunState", "qualityRunState", "productReport", "qualityReport", "projectProgress", "projectProgressFill", "themeToggle", "openIntake", "intakeDialog", "intakeSummary", "queueList", "closeIntake", "requirement", "assessIntake", "intakeResult", "queueReady", "intakeMilestone", "submitIntake", "clearIntake", "draftList", "batchDrafts", "saveDraft", "saveAnswers", "requirementField", "assessingHint", "reassessIntake",
   ];
   const elements = Object.fromEntries(ids.map(id => [id, node()]));
   const actions = ["start", "loop", "watch"].map(command => {
@@ -85,6 +87,16 @@ function page({ storage = new Map(), handler = () => response(), hidden = false,
     },
     confirm: () => true,
   }, { filename: "dashboard-app.js" });
+  // 统一确认弹窗：测试里自动回答，保持既有流程不变。
+  const baseShowModal = elements.confirmDialog.showModal;
+  elements.confirmDialog.showModal = () => {
+    baseShowModal();
+    if (elements.confirmInput.hidden === false) {
+      if (promptResult === null) { elements.confirmCancel.dispatch("click"); return; }
+      elements.confirmInput.value = promptResult;
+    }
+    (confirmResult ? elements.confirmAccept : elements.confirmCancel).dispatch("click");
+  };
   return { elements, actions, document, storage, requests, clipboard };
 }
 
@@ -629,6 +641,25 @@ test("milestone detail distinguishes all six task states", async () => {
   for (const state of ["merged","unverified","blocked","paused","running","pending"]) {
     assert.match(css, new RegExp("\\.milestone-state\\[data-state=" + state + "\\]"), "missing colour rule for " + state);
   }
+});
+
+test("confirmations use the in-page dialog instead of native confirm/prompt/alert", async () => {
+  const source = await readFile(new URL("../web/app.js", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /(?<![\w.])confirm\(/, "native confirm() must not be used");
+  assert.doesNotMatch(source, /(?<![\w.])prompt\(/, "native prompt() must not be used");
+  assert.doesNotMatch(source, /(?<![\w.])alert\(/, "native alert() must not be used");
+  assert.match(source, /askConfirm/);
+});
+
+test("cancelling the unified dialog aborts the action", async () => {
+  const app = page({ confirmResult: false });
+  app.elements.token.value = TOKEN;
+  app.elements.connect.dispatch("click");
+  await tick();
+  app.elements.autoMerge.dispatch("click");
+  await tick();
+  assert.equal(app.elements.confirmDialog.open, false, "dialog closes after answering");
+  assert.equal(app.requests.filter(request => request.path === "/api/auto-merge").length, 0);
 });
 
 test("active intake and advisory report show elapsed state",async()=>{
