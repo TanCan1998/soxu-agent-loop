@@ -118,3 +118,7 @@ pnpm agent:dashboard        # 等价：npm run agent:dashboard
 启动时会打印实际使用的目标项目。`SOXU_PROJECT_ROOT` 未设置时自动回落到同级的 `../SOXU` 检出（打印 `(sibling checkout)`）；显式设置则始终优先；同级不存在时直接报错，不会猜路径。
 
 其余脚本同样是 `agent:<命令>`：`agent:start`、`agent:loop`、`agent:watch`、`agent:status`、`agent:doctor`、`agent:models`、`agent:update`、`agent:cleanup`、`agent:seed-issues`；`pnpm agent -- <参数>` 可透传任意子命令。
+
+界面上的「从 GitHub 更新」按钮旁会显示 **（可更新）** 或 **（无需更新）**（基于 `git fetch` 与本地 HEAD 的对比，60 秒缓存，打开页面即自动刷新）。
+
+点击该按钮会：检查 → 确认 → 拉取更新 → 跑冒烟 → **自动重启控制台**。重启是把端口交给新进程：旧进程先停止接受连接、拉起新实例并探活，成功后退出；探活失败则恢复旧监听，不会把控制台弄丢。正在运行的任务不受影响（runner 是独立进程并写了 `.soxu/runner/state.json`，新控制台会自动接管），页面用同一令牌自动重连。
