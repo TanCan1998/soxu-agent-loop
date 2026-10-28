@@ -1,0 +1,45 @@
+name: Commit policy
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+concurrency:
+  group: commit-policy-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  commit-message:
+    name: Validate commit messages
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Enforce Gitmoji + type + scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BASE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          CHECKOUT_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            node scripts/check-commit-msg.mjs --range "$PR_BASE" "$PR_HEAD"
+          elif [[ "$EVENT_NAME" == "push" ]]; then
+            node scripts/check-commit-msg.mjs --range "$PUSH_BASE" "$CHECKOUT_SHA"
+          else
+            ZERO_SHA="$(printf '%040d' 0)"
+            BASE_SHA="$(git rev-parse HEAD^ 2>/dev/null || printf '%s' "$ZERO_SHA")"
+            node scripts/check-commit-msg.mjs --range "$BASE_SHA" "$CHECKOUT_SHA"
+          fi
