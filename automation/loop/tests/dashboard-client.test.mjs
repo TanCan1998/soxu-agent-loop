@@ -739,4 +739,14 @@ test("the update button checks when current and applies when an update is availa
   assert.match(view.elements.notice.textContent, /已是最新/);
 });
 
+test("the token survives a reload when sessionStorage was cleared (Android browsers)", async () => {
+  // 雨见等安卓浏览器刷新后 sessionStorage 可能被清空，localStorage 仍在。
+  const preferences = new Map([[TOKEN_STORAGE_KEY, TOKEN]]);
+  const storage = new Map();
+  const app = page({ storage, preferences, handler: () => ({ ok: true, status: 200, json: async () => ({ ...STATUS }) }) });
+  await tick();
+  assert.equal(app.elements.authPanel.hidden, true, "auto-connects from localStorage");
+  assert.equal(storage.get(TOKEN_STORAGE_KEY), TOKEN, "sessionStorage is re-seeded");
+  assert.equal(preferences.get(TOKEN_STORAGE_KEY), TOKEN, "localStorage keeps the token across reloads");
+});
 

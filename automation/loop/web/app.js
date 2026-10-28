@@ -26,20 +26,34 @@ let modelSettings = null, modelDraft = null, modelCatalog = [], actualModels = n
 
 function stored(storage, key) { try { return storage.getItem(key); } catch { return null; } }
 function save(storage, key, value) { try { storage.setItem(key, String(value)); } catch {} }
+/** sessionStorage 在部分安卓浏览器（如雨见）刷新后会被清空，所以优先读 localStorage。 */
+function safeStorage(name) {
+  try { const storage = globalThis[name]; return storage && typeof storage.getItem === "function" ? storage : null; }
+  catch { return null; }
+}
 function restoreToken() {
-  const token = stored(sessionStorage, TOKEN_STORAGE_KEY);
-  if (token && validToken(token)) return token;
-  if (token) forgetToken(token);
+  for (const storage of [safeStorage("localStorage"), safeStorage("sessionStorage")]) {
+    if (!storage) continue;
+    const token = stored(storage, TOKEN_STORAGE_KEY);
+    if (token && validToken(token)) { persistToken(token); return token; }
+    if (token) forgetToken(token);
+  }
   return "";
+}
+function persistToken(token) {
+  for (const storage of [safeStorage("localStorage"), safeStorage("sessionStorage")]) {
+    if (storage) save(storage, TOKEN_STORAGE_KEY, token);
+  }
 }
 /** Must stay in sync with the server: any 8-128 printable characters, no spaces. */
 function validToken(value) {
   return typeof value === "string" && /^[\x21-\x7e]{8,128}$/.test(value);
 }
 function forgetToken(token) {
-  try {
-    if (sessionStorage.getItem(TOKEN_STORAGE_KEY) === token) sessionStorage.removeItem(TOKEN_STORAGE_KEY);
-  } catch {}
+  for (const storage of [safeStorage("localStorage"), safeStorage("sessionStorage")]) {
+    if (!storage) continue;
+    try { if (storage.getItem(TOKEN_STORAGE_KEY) === token) storage.removeItem(TOKEN_STORAGE_KEY); } catch {}
+  }
 }
 function notice(message) { $("notice").textContent = message; $("authNotice").textContent = message; }
 /**
@@ -481,7 +495,7 @@ async function refresh() {
     if (token !== tokenInput.value.trim()) return;
     const wasConnected = connected;
     render(data);
-    save(sessionStorage, TOKEN_STORAGE_KEY, token);
+    persistToken(token);
     if (!wasConnected) notice("连接成功；页面将实时更新，刷新后自动恢复。");
     if (!streamController && !reconnectTimer) void openStream(token);
   } catch (error) {
