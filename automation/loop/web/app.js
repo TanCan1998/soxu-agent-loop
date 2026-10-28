@@ -99,6 +99,34 @@ function element(tag, value, className) {
   if (className) result.className = className;
   return result;
 }
+/**
+ * 自绘 tooltip：替代原生 title 属性，跟随主题变量、支持键盘焦点。
+ * 用法：元素 data-tip="文案"（静态）或 setTip(el, text)（动态，写入 data-tip）。
+ */
+const tipBox = () => $("tip");
+function showTip(target) {
+  const text = target?.dataset?.tip;
+  if (!text) return hideTip();
+  const tip = tipBox();
+  tip.textContent = text;
+  tip.hidden = false;
+  const rect = target.getBoundingClientRect();
+  const margin = 8;
+  let left = rect.left + rect.width / 2 - tip.offsetWidth / 2;
+  left = Math.max(margin, Math.min(left, window.innerWidth - tip.offsetWidth - margin));
+  let top = rect.top - tip.offsetHeight - margin;
+  if (top < margin) top = rect.bottom + margin; // 顶部放不下时翻到下方
+  tip.style.left = left + "px";
+  tip.style.top = top + "px";
+}
+function hideTip() { const tip = tipBox(); tip.hidden = true; }
+function setTip(el, text) { if (text) el.setAttribute("data-tip", text); else el.removeAttribute("data-tip"); }
+document.addEventListener("pointerover", event => showTip(event.target.closest?.("[data-tip]")));
+document.addEventListener("pointerout", event => { if (event.target.closest?.("[data-tip]")) hideTip(); });
+document.addEventListener("focusin", event => showTip(event.target.closest?.("[data-tip]")));
+document.addEventListener("focusout", hideTip);
+window.addEventListener("scroll", hideTip, true);
+
 function disableControls() {
   for (const button of document.querySelectorAll("[data-command]")) button.disabled = true;
   $("stop").disabled = true;
@@ -352,7 +380,7 @@ function showMilestoneDetail(id, name, stage, limited, source) {
       : { key:"pending", label:"待处理", icon:"○" };
     const chip=element("span",state.icon+" "+state.label,"milestone-state");
     chip.dataset.state=state.key;
-    if(item.localStatus) chip.setAttribute("title","本地状态："+item.localStatus+"（未查询 GitHub）");
+    if(item.localStatus) setTip(chip,"本地状态："+item.localStatus+"（未查询 GitHub）");
     row.append(label,chip); list.append(row);
     }
   }
@@ -371,7 +399,7 @@ function renderPhaseTasks(data) {
   if (!list.length) { host.append(element("span", "无", "subtle")); return; }
   for (const task of list.slice(0, 8)) {
     const chip = element("span", task.title, "phase-task-chip");
-    chip.title = "#" + task.id + " " + task.title;
+    setTip(chip, "#" + task.id + " " + task.title);
     host.append(chip);
   }
   if (list.length > 8) host.append(element("span", "+" + (list.length - 8) + " 项", "subtle"));
@@ -442,15 +470,16 @@ function render(data) {
   // 发布：preview 随时可发；release 需 dev 已合入 main（服务端也会再校验一次）。
   const publish = data.publish ?? null;
   $("publishButton").disabled = Boolean(data.busy);
-  $("publishButton").title = publish?.error
+  setTip($("publishButton"), publish?.error
     ? "发布状态不可用：" + publish.error
-    : publish?.mergedIntoRelease ? "dev 已合入 main，可发布 release" : "release 需先把 dev 合入 main";
+    : publish?.mergedIntoRelease ? publish.integrationBranch + " 已合入 " + publish.releaseBranch + "，release 将直接打 tag"
+    : "release 将开 " + (publish?.integrationBranch ?? "dev") + "→" + (publish?.releaseBranch ?? "main") + " 的 PR，等必需检查通过后合并再打 tag");
   // 人工通道：release 走 PR，不依赖本地检出状态，因此只有状态不可用或 Runner 忙时才禁用。
   const releaseBlocked = !publish || publish.error ? "发布状态不可用" : null;
   $("publishRelease").disabled = Boolean(releaseBlocked) || Boolean(data.busy);
-  $("publishRelease").title = releaseBlocked ?? (publish.mergedIntoRelease
+  setTip($("publishRelease"), releaseBlocked ?? (publish.mergedIntoRelease
     ? publish.integrationBranch + " 已合入 " + publish.releaseBranch + "，将直接在 " + publish.releaseBranch + " 打 tag"
-    : "将创建 " + publish.integrationBranch + "→" + publish.releaseBranch + " 的 PR，等必需检查通过后合并，再打 tag");
+    : "将创建 " + publish.integrationBranch + "→" + publish.releaseBranch + " 的 PR，等必需检查通过后合并，再打 tag"));
   $("publishHint").textContent = publish?.error
     ? "发布状态不可用：" + publish.error
     : publish?.mergedIntoRelease
@@ -653,7 +682,7 @@ async function copyText(text) {
 }
 function copyButton(text, label) {
   const button=element("button","⧉","icon-button"); button.type="button";
-  button.setAttribute("aria-label",label);button.setAttribute("title",label);
+  button.setAttribute("aria-label",label);setTip(button,label);
   button.addEventListener("click",()=>void copyText(text));return button;
 }
 function reportParts(report) {
@@ -720,7 +749,7 @@ function setTheme(theme) {
   const label = nextTheme === "light" ? "切换到浅色主题" : "切换到深色主题";
   $("themeToggle").dataset.nextTheme = nextTheme;
   $("themeToggle").setAttribute("aria-label", label);
-  $("themeToggle").setAttribute("title", label);
+  setTip($("themeToggle"), label);
   save(preferenceStorage, THEME_KEY, theme);
 }
 const NO_UNKNOWNS=/^(?:无|暂无|没有|无需确认|无待确认项|none|null|n\/a)[。.！!]?$/i;
@@ -842,7 +871,7 @@ function updateBadge(info) {
   return "（无需更新）已是最新 · " + (info.comparison ?? "main → origin/main");
 }
 function applyUpdateBadge(info) {
-  $("updateTool").title = updateBadge(info);
+  setTip($("updateTool"), updateBadge(info));
   $("updateTool").setAttribute("aria-label", "从 GitHub 更新：" + updateBadge(info));
 }
 function updateText(info, protocolVersion) {
@@ -858,10 +887,22 @@ function updateText(info, protocolVersion) {
   if (info.status === "up-to-date") return "已是最新" + version;
   return (info.status || "未知") + (info.error ? " · " + info.error : "") + protocol;
 }
+/** 按钮内嵌 loading：文本不变，叠加转圈图标并禁用，避免布局跳动。 */
+function buttonBusy(el, busy) {
+  el.disabled = busy;
+  if (busy && !el.querySelector(".btn-spin")) {
+    const spin = element("span", undefined, "btn-spin");
+    spin.setAttribute("aria-hidden", "true");
+    el.prepend(spin);
+  } else if (!busy) el.querySelector(".btn-spin")?.remove();
+}
 /** No update: the click checks. Update available: the click applies it. */
 async function updateFromGithub() {
   if (!connected) return notice("先连接本地控制台。");
-  $("updateTool").disabled = true;
+  const button = $("updateTool");
+  if (button.disabled) return;
+  buttonBusy(button, true);
+  $("updateStatus").textContent = "正在检查更新…";
   try {
     if (lastUpdate?.available) return await applyToolUpdate(lastUpdate);
     const check = await api("/api/update", { method: "POST", body: { action: "check" } });
@@ -872,17 +913,41 @@ async function updateFromGithub() {
     notice("发现更新（" + (check.comparison ?? "main → origin/main") + "，behind " + check.behind + "），再次点击按钮即更新。");
   } catch (error) {
     notice("检查更新失败：" + error.message);
+    $("updateStatus").textContent = "检查更新失败：" + error.message;
   } finally {
-    $("updateTool").disabled = false;
+    buttonBusy(button, false);
   }
 }
 async function applyToolUpdate(check) {
   if (!await askConfirm("更新到 " + (check.behind ?? 1) + " 个新提交并重启控制台？正在运行的任务不会被中断（新控制台会自动接管），冒烟失败会自动回滚。")) return;
-  const result = await api("/api/update", { method: "POST", body: { action: "apply" } });
-  if (result.status === "updated" || result.status === "up-to-date") lastUpdate = { ...check, available: false, behind: 0 };
-  $("updateStatus").textContent = updateText(result, result.protocolVersion);
-  applyUpdateBadge(lastUpdate);
-  notice(result.restarting ? "已更新，控制台正在重启；页面会自动重连并接管运行中的任务。" : "更新结果：" + result.status);
+  const button = $("updateTool");
+  buttonBusy(button, true);
+  $("updateStatus").textContent = "正在下载并应用更新…";
+  $("restartOverlay").hidden = false;
+  try {
+    const result = await api("/api/update", { method: "POST", body: { action: "apply" } });
+    if (result.status === "updated" || result.status === "up-to-date") lastUpdate = { ...check, available: false, behind: 0 };
+    $("updateStatus").textContent = updateText(result, result.protocolVersion);
+    applyUpdateBadge(lastUpdate);
+    notice(result.restarting ? "已更新，控制台正在重启；页面会自动重连并接管运行中的任务。" : "更新结果：" + result.status);
+    if (!result.restarting) $("restartOverlay").hidden = true;
+  } catch (error) {
+    $("restartOverlay").hidden = true;
+    $("updateStatus").textContent = "更新失败：" + error.message;
+    notice("更新失败：" + error.message);
+  } finally {
+    buttonBusy(button, false);
+  }
+}
+/** 服务器换新（instanceId 变化）即接管成功：隐藏覆盖层。 */
+function watchRestartTakeover() {
+  const original = resetInstance;
+  // resetInstance 在新 instanceId 时重建全部状态；接管成功后关掉覆盖层。
+  return function patchedReset(next) {
+    const changed = instanceId !== next;
+    original(next);
+    if (changed) $("restartOverlay").hidden = true;
+  };
 }
 $("updateTool").addEventListener("click", () => void updateFromGithub());
 for (const page of pageNames) $("nav"+page).addEventListener("click",()=>showPage(page));
@@ -1038,14 +1103,20 @@ $("publishButton").addEventListener("click", () => { $("publishMenu").hidden = !
 for (const [id, mode] of [["publishPreview", "preview"], ["publishRelease", "release"]]) {
   $(id).addEventListener("click", async () => {
     if (!connected) return notice("先连接本地控制台。");
+    const button = $(id);
+    if (button.disabled) return;
     $("publishMenu").hidden = true;
-    const label = mode === "preview" ? "发布 preview 版本（在集成分支打预发布 tag 并触发构建）" : "发布 release 版本（先把 dev 合入 main，再在 main 打 tag 并触发构建）";
+    const label = mode === "preview" ? "发布 preview 版本（在集成分支打预发布 tag 并触发构建）" : "发布 release 版本（开 dev→main 的 PR，等必需检查通过后合并，再在 main 打 tag）";
     if (!await askConfirm(label + "？此操作会推送 tag 并触发 GitHub Actions 构建。")) return;
+    buttonBusy(button, true);
+    setTip(button, null);
+    notice(mode === "release" ? "发布中：等必需检查通过后自动合并并打 tag，可能需要几分钟…" : "发布中：正在创建预发布 tag…");
     try {
       const result = await api("/api/publish", { method: "POST", body: { mode } });
-      notice("已发起发布：" + result.status + " " + (result.tag ?? ""));
+      notice("发布完成：" + result.status + " · " + (result.tag ?? "") + (result.merge ? " · " + result.merge : ""));
       await refresh();
     } catch (error) { notice("发布失败：" + error.message); }
+    finally { buttonBusy(button, false); }
   });
 }
 $("stop").addEventListener("click", async () => {

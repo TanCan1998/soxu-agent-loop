@@ -1,10 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolveRoleModels, modelArgs, loadRoleModels } from '../src/agent-models.mjs';
 import { runPi } from '../src/rpc.mjs';
+
+// 与 SOXU 仓库 automation/agent-models.json 相同的基线（测试封闭用，不读真实文件）。
+const baseline = {schemaVersion: 1, roles: {
+  developer: {provider: 'magpie', model: 'auto/deepseek-v4.1-flash', thinking: null},
+  reviewer: {provider: 'magpie', model: 'auto/deepseek-v4.1-flash', thinking: null}
+}};
 
 const empty = {schemaVersion: 1, roles: {
   developer: {provider: null, model: null, thinking: null},
@@ -36,17 +42,29 @@ test('invalid or partial model values fail closed instead of silently selecting 
 });
 
 test('checked-in Magpie model is selected for developer and reviewer', async () => {
-  const roles = await loadRoleModels({});
-  for (const role of ['developer', 'reviewer']) {
-    assert.deepEqual(roles[role], {provider:'magpie', model:'auto/deepseek-v4.1-flash', thinking:null});
-    assert.deepEqual(modelArgs(roles[role]), ['--provider','magpie','--model','auto/deepseek-v4.1-flash']);
-  }
+  // 测试必须封闭：用临时项目根 + 仓库基线 agent-models.json，绝不读真实 SOXU 的 .soxu/model-settings.json
+  // （界面保存过的模型选择会持久化在那里，导致同一测试随本机状态翻转）。
+  const dir = await mkdtemp(join(tmpdir(), 'soxu-baseline-'));
+  try {
+    await mkdir(join(dir, 'automation'), {recursive: true});
+    await writeFile(join(dir, 'automation', 'agent-models.json'), JSON.stringify(baseline));
+    const roles = await loadRoleModels({}, {root: dir});
+    for (const role of ['developer', 'reviewer']) {
+      assert.deepEqual(roles[role], {provider:'magpie', model:'auto/deepseek-v4.1-flash', thinking:null});
+      assert.deepEqual(modelArgs(roles[role]), ['--provider','magpie','--model','auto/deepseek-v4.1-flash']);
+    }
+  } finally { await rm(dir, {recursive: true, force: true}); }
 });
 
 test('Magpie checked-in model can be overridden only by explicit complete runtime choice', async () => {
-  const models = await loadRoleModels({ SOXU_DEVELOPER_PROVIDER:'magpie', SOXU_DEVELOPER_MODEL:'auto/deepseek-v4.1-flash' });
-  assert.equal(models.developer.model,'auto/deepseek-v4.1-flash');
-  assert.deepEqual(modelArgs(models.developer), ['--provider','magpie','--model','auto/deepseek-v4.1-flash']);
+  const dir = await mkdtemp(join(tmpdir(), 'soxu-override-'));
+  try {
+    await mkdir(join(dir, 'automation'), {recursive: true});
+    await writeFile(join(dir, 'automation', 'agent-models.json'), JSON.stringify(baseline));
+    const models = await loadRoleModels({ SOXU_DEVELOPER_PROVIDER:'magpie', SOXU_DEVELOPER_MODEL:'auto/deepseek-v4.1-flash' }, {root: dir});
+    assert.equal(models.developer.model,'auto/deepseek-v4.1-flash');
+    assert.deepEqual(modelArgs(models.developer), ['--provider','magpie','--model','auto/deepseek-v4.1-flash']);
+  } finally { await rm(dir, {recursive: true, force: true}); }
 });
 
 test('RPC forwards explicit model flags and persists Pi sessions', {skip:process.platform==='win32'}, async () => {
