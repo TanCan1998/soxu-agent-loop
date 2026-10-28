@@ -80,7 +80,7 @@ async function inspect(root, state, base = "main") {
     else if (state.status !== "running" && state.status !== "paused" && state.status !== "blocked") info.reason = "not-recoverable";
     else if (info.lock === "active" || info.lock === "unsafe") info.reason = "worktree-locked";
     else if (!intent && state.base && state.base !== head) info.reason = "checkpoint-base-mismatch";
-    else if (info.ahead > 0) info.reason = "diverged-from-main";
+    else if (info.ahead > 0) info.reason = "diverged-from-" + base;
     // A checkpoint in tests/review/install can resume on an already-current
     // branch without invalidating its tested/reviewed evidence.
     else if (info.behind === 0 && !intent) info.reason = "up-to-date";
@@ -176,7 +176,9 @@ export async function inspectWorktrees({ root = ROOT, sync = false, issueNumbers
     item.id === state.issue.number && item.local === Boolean(state.local)));
   const output = [];
   for (const { state, dir } of entries) {
-    let item = await inspect(root, state);
+    // 必须把 base 透传下去：漏传会用默认 main，导致以 dev 为基点的工作树
+    // 被误判成 diverged-from-main 而拒绝恢复。
+    let item = await inspect(root, state, base);
     if (!sync || !item.canSync) { output.push(item); continue; }
     const path = taskLock(root, state);
     await mkdir(dirname(path), { recursive: true });
