@@ -16,6 +16,7 @@ import { cleanupMergedTasks } from "./merged-cleanup.mjs";
 import { writeRunnerState, recordRunnerExitSync, runnerLogPath } from "./runner-state.mjs";
 import { teeStdioToFile } from "./runner-log.mjs";
 import { checkUpdate, applyUpdate } from "./update.mjs";
+import { partitionRecoveryCandidates } from "./blocked-recovery.mjs";
 
 // Register before any command runs: `start` is awaited at top level, so a hook at the
 // bottom of the file would only run after the task finished and be useless for reattach.
@@ -140,12 +141,12 @@ async function once() {
   return Promise.all(available.slice(0, p.maxConcurrentAgents).map(issue => processIssue(issue, { policy: p, local, signal: controller.signal })));
 }
 /** One finite recovery batch: paused and blocked tasks are handled uniformly. */
-async function recover() {
+async function recover(selected = null) {
   const includeBlocked = true;
-  const candidates = (await listPaused(undefined, { includeBlocked })).filter(s => local ? s.local : !s.local);
+  const candidates = selected ?? (await listPaused(undefined, { includeBlocked })).filter(s => local ? s.local : !s.local);
   if (!candidates.length) { console.log("No recoverable task; nothing to replay or bill."); return; }
-  const select = args.find(x => /^#?\d+$/.test(x));
-  const tasks = select ? candidates.filter(s => s.issue.number === Number(select.replace("#", ""))) : candidates;
+  const select = selected ? null : args.find(x => /^#?\d+$/.test(x));
+  const tasks = selected ?? (select ? candidates.filter(s => s.issue.number === Number(select.replace("#", ""))) : candidates);
   if (!tasks.length) throw new Error(`No saved task matches ${select}`);
   if (dryRun) { for (const s of tasks) console.log(`would recover #${s.issue.number} at ${s.phase} (${s.status}: ${s.reason ?? "interrupted"})`); return; }
   // Safely preserve dirty edits and let Developer reconcile any main conflicts.
@@ -169,16 +170,19 @@ const problematic = results => results.some(x => x.status === "paused" || x.stat
  */
 async function start() {
   const candidates = (await listPaused(undefined, { includeBlocked: true })).filter(s => local ? s.local : !s.local);
+  // blocked 任务自动重试，但有界：超过上限就不再抢占队列，新任务可以继续。
+  const { actionable, exhausted } = partitionRecoveryCandidates(candidates, p.maxBlockedRecoveries ?? 2);
+  for (const task of exhausted) console.log(`Skipping #${task.issue.number}: blocked ${task.blockedRecoveryCount} time(s) without progress; needs manual inspection.`);
   if (dryRun) {
-    if (candidates.length) { await recover(); return; }
+    if (actionable.length) { await recover(actionable); return; }
     const available = await issues();
     if (!available.length) { console.log("No recoverable or eligible task; nothing would run."); return; }
     for (const issue of available.slice(0, p.maxConcurrentAgents)) console.log(`would run #${issue.number}: ${issue.title}`);
     return;
   }
-  if (candidates.length) {
+  if (actionable.length) {
     if (!local) await cleanup();
-    await recover();
+    await recover(actionable);
     if (!local) await cleanup();
     return;
   }

@@ -54,6 +54,8 @@ export async function policy() {
   if (value.maxConcurrentAgents < 1 || value.maxConcurrentAgents > 4) throw new Error("maxConcurrentAgents must be 1..4");
   if (value.maxRoundsPerInvocation > 50 || value.maxRetries > 3) throw new Error("policy exceeds safety limits");
   if (value.watchIntervalMinutes < 5 || value.maxContinuousHours > 24 || value.maxIssuesPerWatch > 50) throw new Error("Watch budget is outside safe bounds");
+  if (value.maxBlockedRecoveries !== undefined && (!Number.isInteger(value.maxBlockedRecoveries) || value.maxBlockedRecoveries < 0 || value.maxBlockedRecoveries > 5))
+    throw new Error("maxBlockedRecoveries must be 0..5");
   const t = value.timeouts ?? {};
   for (const [name, min, max] of [["piStartupSeconds", 10, 300], ["piIdleSeconds", 30, 900], ["piHardMinutes", 5, 90], ["reviewHardMinutes", 2, 30], ["installMinutes", 1, 20], ["networkSeconds", 10, 120], ["shutdownGraceSeconds", 1, 10]]) {
     if (!Number.isSafeInteger(t[name]) || t[name] < min || t[name] > max) throw new Error(`Invalid timeouts.${name} (expected ${min}..${max})`);
