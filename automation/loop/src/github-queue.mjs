@@ -28,7 +28,9 @@ export function planGithubQueue(issues, catalog, mergedNumbers = new Set()) {
   const completed = new Set();
   for (const task of catalog) {
     const issue = mapped.get(task.id);
-    if (issue?.state === "CLOSED" && mergedNumbers.has(issue.number)) completed.add(task.id);
+    // Completion is "merged into the integration branch", not "issue closed":
+    // Closes #N only auto-closes when merging into the default branch (main).
+    if (issue && mergedNumbers.has(issue.number)) completed.add(task.id);
   }
   const { ready: eligible } = planTaskQueue(catalog, completed);
   const runnable = new Set(eligible.map(x => x.id));

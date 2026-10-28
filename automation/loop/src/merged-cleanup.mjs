@@ -73,7 +73,11 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
       } else if(ref.code!==1) throw Error("local-ref-unavailable");
       const complete=["absent","deleted"].includes(remoteStatus) && ["absent","deleted"].includes(localStatus);
       fresh.cleanup={complete,remote:remoteStatus,local:localStatus,checkedAt:new Date().toISOString()};await writeCheckpoint(fresh,checkpointDir);
-      const result={issue:n,status:complete?"cleaned":"preserved",remote:remoteStatus,local:localStatus};results.push(result);log(`Merged cleanup #${n}: remote=${remoteStatus}, local=${localStatus}`);
+      const result={issue:n,status:complete?"cleaned":"preserved",remote:remoteStatus,local:localStatus};results.push(result);
+      // main is the default branch, so "Closes #N" never fires for dev merges. Close the
+      // issue here (idempotent) so the issue list and downstream dependencies agree.
+      if(complete){try{const seen=JSON.parse((await exec("gh",["issue","view",String(n),"--json","state"])).stdout);if(seen.state==="OPEN"){await exec("gh",["issue","close",String(n),"--comment",`已合入集成分支 ${base}；release 发布到 main 后随版本生效。`]);result.issueClosed="closed";}else result.issueClosed="already-closed";}catch{result.issueClosed="unknown";}}
+      log(`Merged cleanup #${n}: remote=${remoteStatus}, local=${localStatus}`);
     } catch(e) {results.push({issue:n,status:"error"});log(`Merged cleanup #${n} could not be completed; the next run will retry.`);}
     finally {await rm(lock,{force:true});}
   }

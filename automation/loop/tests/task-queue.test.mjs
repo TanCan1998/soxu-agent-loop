@@ -22,6 +22,8 @@ test('merged detection follows the configured integration branch', () => {
   assert.deepEqual([...mergedIssueNumbers(prs)], [12], "default stays main for compatibility");
 });
 
+
+
 test('an absent backlog or done directory is an empty catalog, not an error', async () => {
   const root = await mkdtemp(join(tmpdir(), 'soxu-catalog-'));
   try {
