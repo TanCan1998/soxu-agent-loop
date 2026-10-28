@@ -660,7 +660,7 @@ export function createDashboardServer({ root = ROOT, token, bindHost = "127.0.0.
       try { return reply(200, await coordinator.snapshot()); }
       catch { return reply(503, { error: "status-unavailable" }); }
     }
-    if (request.method === "POST" && ["/api/run", "/api/stop", "/api/merge", "/api/auto-merge", "/api/update", "/api/publish", "/api/intake-assess", "/api/intake-submit", "/api/intake-clear", "/api/drafts-save", "/api/drafts-move", "/api/drafts-remove", "/api/drafts-assess", "/api/drafts-answer", "/api/drafts-batch", "/api/drafts-resolve", "/api/drafts-reassess", "/api/advisory-run", "/api/advisory-delete", "/api/model-settings"].includes(request.url)) {
+    if (request.method === "POST" && ["/api/run", "/api/stop", "/api/merge", "/api/auto-merge", "/api/update", "/api/publish", "/api/intake-assess", "/api/intake-submit", "/api/intake-clear", "/api/drafts-save", "/api/drafts-move", "/api/drafts-reorder", "/api/drafts-ready", "/api/drafts-remove", "/api/drafts-assess", "/api/drafts-answer", "/api/drafts-batch", "/api/drafts-resolve", "/api/drafts-reassess", "/api/advisory-run", "/api/advisory-delete", "/api/model-settings"].includes(request.url)) {
       if (!request.headers.origin || !originAllowed(request.headers.origin) || request.headers["content-type"] !== "application/json") {
         return reply(403, { error: "invalid-request-origin" });
       }
@@ -704,6 +704,8 @@ export function createDashboardServer({ root = ROOT, token, bindHost = "127.0.0.
           const keys=Object.keys(body).sort().join(","); let result;
           if(request.url==="/api/drafts-save" && keys==="id,requirement") result=await coordinator.drafts.save(body);
           else if(request.url==="/api/drafts-move" && keys==="direction,id") result=await coordinator.drafts.move(body.id,body.direction);
+          else if(request.url==="/api/drafts-reorder" && keys==="beforeId,id") result=await coordinator.drafts.reorder(body.id,body.beforeId);
+          else if(request.url==="/api/drafts-ready" && keys==="id,ready") result=await coordinator.drafts.setReady(body.id,body.ready===true);
           else if(request.url==="/api/drafts-remove" && keys==="id") result=await coordinator.drafts.remove(body.id);
           else if(request.url==="/api/drafts-assess" && keys==="id") result=await coordinator.drafts.evaluate(body.id);
           else if(request.url==="/api/drafts-answer" && keys==="answers,id,milestone,ready") result=await coordinator.drafts.answer(body.id,body.answers,body.ready,body.milestone);
