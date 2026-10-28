@@ -118,6 +118,52 @@ function closeDialog(dialog) {
   );
   animation.finished.then(done, done);
 }
+/**
+ * 自绘滚动指示条。
+ * overlay 滚动条环境（Android 浏览器/WebView、Chromium overlay 模式）会完全忽略
+ * ::-webkit-scrollbar，所以这里用 DOM 指示条兜底，保证任何环境下视觉一致。
+ */
+const scrollIndicators = [];
+function mountScrollIndicator(scroller = null) {
+  const bar = document.createElement("div");
+  bar.className = "scroll-thumb";
+  document.body.appendChild(bar);
+  let hideTimer = null;
+  const sync = () => {
+    // 指示条始终 fixed 定位：容器滚动时 rect 不变，滚动只改变 thumb 的偏移。
+    const rect = scroller ? scroller.getBoundingClientRect() : { top: 0, right: window.innerWidth, height: document.documentElement.clientHeight };
+    const top = scroller ? scroller.scrollTop : window.scrollY;
+    const view = scroller ? scroller.clientHeight : document.documentElement.clientHeight;
+    const total = scroller ? scroller.scrollHeight : document.documentElement.scrollHeight;
+    const visibleArea = scroller ? rect.height : view;
+    if (!Number.isFinite(view) || !Number.isFinite(total) || view <= 0) return;
+    if (total <= view + 2 || visibleArea < 40) { bar.classList.remove("visible"); return; }
+    const track = visibleArea - 8;
+    const height = Math.max(28, Math.round(track * view / total));
+    const offset = Math.round((track - height) * (top / (total - view)));
+    bar.style.height = height + "px";
+    bar.style.left = (rect.right - 10) + "px";
+    bar.style.top = (rect.top + 4 + offset) + "px";
+    bar.classList.add("visible", "active");
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => bar.classList.remove("active"), 900);
+  };
+  (scroller ?? window).addEventListener("scroll", sync, { passive: true });
+  window.addEventListener("resize", sync);
+  scrollIndicators.push(sync);
+  sync();
+  return sync;
+}
+function mountScrollIndicators() {
+  try {
+    // 经典滚动条环境（桌面 Chrome/Edge）由 ::-webkit-scrollbar 负责，不重复画。
+    if (window.innerWidth - document.documentElement.clientWidth > 0) return;
+    mountScrollIndicator(null);
+    for (const node of document.querySelectorAll(".model-groups")) mountScrollIndicator(node);
+  } catch { /* 受限环境（无布局/测试桩）跳过，不影响页面逻辑 */ }
+}
+/** 弹窗开合会改变容器位置，重算一次指示条。 */
+function refreshScrollIndicators() { for (const sync of scrollIndicators) sync(); }
 /** 点击是否落在弹窗盒子之外（背板）。点击弹窗内边距不算外部，避免误关。 */
 function clickedOutside(dialog, event) {
   if (event.target !== dialog) return false;
@@ -1084,7 +1130,7 @@ async function refreshModelCatalog() {
 }
 $("openModels").addEventListener("click",async()=>{
   if (!connected || !modelSettings) return notice("先连接控制台并检查模型配置。");
-  modelDraft=JSON.parse(JSON.stringify(modelSettings));$("modelScope").value="global";$("modelSearch").value="";$("modelDialog").showModal();renderModelChoices();await refreshModelCatalog();
+  modelDraft=JSON.parse(JSON.stringify(modelSettings));$("modelScope").value="global";$("modelSearch").value="";$("modelDialog").showModal();setTimeout(refreshScrollIndicators,0);renderModelChoices();await refreshModelCatalog();
 });
 $("closeModels").addEventListener("click",()=>closeDialog($("modelDialog")));
 $("reloadModels").addEventListener("click",()=>void refreshModelCatalog());
@@ -1202,6 +1248,7 @@ $("stop").addEventListener("click", async () => {
   } catch (error) { notice("停止失败：" + error.message); }
 });
 $("refresh").addEventListener("click", () => void refresh());
+mountScrollIndicators();
 setInterval(() => void refresh(), 15000);
 setInterval(() => { if (!document.hidden) {updateElapsed();updateRunTimers();} }, 1000);
 window.addEventListener("pagehide", stopStream);

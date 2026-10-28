@@ -259,6 +259,11 @@ export class DashboardCoordinator extends EventEmitter {
    * live runner, the checkout moves forward, and a failed smoke gate rolls back.
    */
   async applyUpdate() {
+    this.applyingUpdate = true;
+    try { return await this.#applyUpdate(); }
+    finally { this.applyingUpdate = false; }
+  }
+  async #applyUpdate() {
     if (this.reserved) throw Object.assign(new Error("runner-busy"), { status: 409 });
     this.reserved = true;
     try {
