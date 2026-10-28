@@ -77,3 +77,7 @@ pnpm agent:dashboard
 Non-loopback binding prints the reachable LAN URLs plus a warning. The Host/Origin allowlist stays in place (DNS rebinding is still rejected).
 
 **Security**: this console can start/stop agents, merge PRs, change model settings and read logs. Anyone who reaches the port with the token has the same power. Use a long random token on a trusted network; never expose it through a public port mapping — use an SSH tunnel instead.
+
+The 「从 GitHub 更新」 button shows **（可更新）** or **（无需更新）** next to it (a `git fetch` comparison against local HEAD, cached for 60 seconds and refreshed automatically when the page loads).
+
+Clicking it checks, confirms, fast-forwards, runs the smoke gate and then **restarts the dashboard by itself**: the old process stops accepting connections, spawns a replacement on the same host/port/token and waits until it answers, then exits; if the replacement never becomes ready the previous listener is restored. Running tasks are unaffected (the runner is detached and registers itself in `.soxu/runner/state.json`, so the new dashboard adopts it) and the page reconnects with the same token.
