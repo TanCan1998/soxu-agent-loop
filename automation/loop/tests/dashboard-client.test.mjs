@@ -442,7 +442,12 @@ test("completed requirements are grouped in a collapsed section", async () => {
   assert.match(done.children[0].textContent, /已完成需求 · 1 项/);
   assert.equal(done.children[1].children.length, 1);
   const active = rows.find(row => row.tagName !== "details");
-  assert.equal(active.children[0].children[1].textContent.includes("已经提交完成"), false);
+  // 行首现在多了一个拖动手柄，按 tagName 取 label，避免依赖子节点下标。
+  const activeLabel = active.children.find(child => child.tagName === "label");
+  assert.ok(activeLabel, "active row keeps a label");
+  assert.equal(activeLabel.children[1].textContent.includes("已经提交完成"), false);
+  // 可拖动的行必须带手柄
+  assert.ok(active.children.find(child => child.className === "drag-handle"), "active row exposes a drag handle");
 });
 
 test("the requirement box is hidden while the agent evaluates", async () => {
