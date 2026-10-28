@@ -117,7 +117,8 @@ export class DashboardCoordinator extends EventEmitter {
     this.taskModels = new Map();
     this.githubStatus = githubStatus;
     this.mergePr = mergePr;
-    this.autoMergeEnabled = false;
+    // 自动合并默认开启：agent 合入集成分支（dev），main 只由人工发布写入。
+    this.autoMergeEnabled = true;
     this.advisory = advisory ?? new AdvisoryManager({root,onChange:()=>{this.lanesNext=0;this.emit("dashboard:event",{type:"status",data:{}});}});
     this.drafts = new DraftStore({root,onChange:()=>this.emit("dashboard:event", {type:"status",data:{}})});
     this.intake = intake ?? new IntakeManager({root, onChange:()=>this.emit("dashboard:event", {type:"status",data:{}})});

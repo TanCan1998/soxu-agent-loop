@@ -358,18 +358,11 @@ test("large model catalog limits rendered rows and keeps search available",async
   assert.equal(app.elements.modelGroups.children[0].children.length,2);
 });
 
-test("auto merge switch reflects server state and sends explicit changes", async () => {
-  let enabled=false;
-  const view=page({handler: (path, options) => {
-    if (path === "/api/auto-merge") { enabled=JSON.parse(options.body).enabled; return response(); }
-    return {ok:true,status:200,async json(){return {...STATUS,autoMergeEnabled:enabled};}};
-  }});
-  view.elements.token.value=TOKEN; view.elements.connect.dispatch("click"); await tick();
-  assert.equal(view.elements.autoMerge.getAttribute("aria-checked"),"false");
-  view.elements.autoMerge.dispatch("click"); await tick(); await tick();
-  assert.equal(view.elements.autoMerge.getAttribute("aria-checked"),"true");
-  view.elements.autoMerge.dispatch("click"); await tick(); await tick();
-  assert.equal(view.elements.autoMerge.getAttribute("aria-checked"),"false");
+test("auto merge is policy-driven; the UI switch is gone", async () => {
+  const source = await readFile(new URL("../web/app.js", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /autoMerge|auto-merge/, "the switch and its endpoint must not be wired in the UI");
+  const html = await readFile(new URL("../web/index.html", import.meta.url), "utf8");
+  assert.doesNotMatch(html, /id="autoMerge"/);
 });
 
 
@@ -656,10 +649,10 @@ test("cancelling the unified dialog aborts the action", async () => {
   app.elements.token.value = TOKEN;
   app.elements.connect.dispatch("click");
   await tick();
-  app.elements.autoMerge.dispatch("click");
+  app.actions.find(button => button.dataset.command === "start").dispatch("click");
   await tick();
   assert.equal(app.elements.confirmDialog.open, false, "dialog closes after answering");
-  assert.equal(app.requests.filter(request => request.path === "/api/auto-merge").length, 0);
+  assert.equal(app.requests.filter(request => request.path === "/api/run").length, 0, "cancelling must not start a run");
 });
 
 test("active intake and advisory report show elapsed state",async()=>{
