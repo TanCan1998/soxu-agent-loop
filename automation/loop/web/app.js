@@ -329,6 +329,7 @@ function render(data) {
   $("autoMerge").setAttribute("aria-checked", data.autoMergeEnabled ? "true" : "false");
   $("autoMerge").textContent = "自动合并：" + (data.autoMergeEnabled ? "开启" : "关闭");
   $("updateStatus").textContent = updateText(data.update, data.protocolVersion);
+  $("updateHint").textContent = updateHint(data.update);
   $("githubStatus").textContent = data.github?.status === "ok" ? "GitHub PR / CI 状态已更新 · " + new Date(data.github.updatedAt).toLocaleTimeString()
     : data.github?.status === "unavailable" ? "GitHub 状态不可用：请检查 gh 登录和网络；任务与 CI 状态未知" : "GitHub 状态加载中";
   $("developmentLane").textContent = data.runner ? "控制台调度运行中" : data.externalLocks ? "存在外部任务锁" : "控制台当前空闲";
@@ -704,11 +705,16 @@ function showPage(name) {
   }
   save(preferenceStorage,PAGE_KEY,name);
 }
+/** Two-state badge requested next to the update button. */
+function updateHint(info) {
+  if (!info) return "（未检查）";
+  return info.available ? "（可更新）" : "（无需更新）";
+}
 function updateText(info, protocolVersion) {
   const protocol = protocolVersion ? " · 协议 v" + protocolVersion : "";
   if (!info) return "尚未检查" + protocol;
   const version = info.toolVersion ? " · 工具 " + info.toolVersion : "";
-  if (info.status === "updated") return "已更新到 " + String(info.current ?? "").slice(0, 8) + " · 重启控制台后生效" + version;
+  if (info.status === "updated") return "已更新到 " + String(info.current ?? "").slice(0, 8) + " · 控制台正在重启" + version;
   if (info.status === "rolled-back") return "更新失败，已回滚到 " + String(info.current ?? "").slice(0, 8) + (info.error ? " · " + info.error : "");
   if (info.dirty) return "工具仓库有本地改动，无法自动更新" + protocol + version;
   if (info.available) return "有更新可用 · behind " + info.behind + protocol + version;
@@ -722,11 +728,13 @@ async function updateFromGithub() {
   try {
     const check = await api("/api/update", { method: "POST", body: { action: "check" } });
     $("updateStatus").textContent = updateText(check, check.protocolVersion);
+    $("updateHint").textContent = updateHint(check);
     if (!check.available) { notice(check.dirty ? "工具仓库有本地改动，无法自动更新" : "已是最新版本"); return; }
-    if (!confirm("从 GitHub 更新工具代码？正在运行的任务不会被中断，冒烟失败会自动回滚。")) return;
+    if (!confirm("从 GitHub 更新工具代码并重启控制台？正在运行的任务不会被中断（新控制台会自动接管），冒烟失败会自动回滚。")) return;
     const result = await api("/api/update", { method: "POST", body: { action: "apply" } });
     $("updateStatus").textContent = updateText(result, result.protocolVersion);
-    notice(result.status === "updated" ? "热更新完成，重启控制台后对新任务生效" : "热更新：" + result.status);
+    $("updateHint").textContent = "（无需更新）";
+    notice(result.restarting ? "已更新，控制台正在重启；页面会自动重连并接管运行中的任务。" : "热更新：" + result.status);
   } catch (error) {
     notice("热更新失败：" + error.message);
   } finally {

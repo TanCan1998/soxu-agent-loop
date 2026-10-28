@@ -46,7 +46,7 @@ function page({ storage = new Map(), handler = () => response(), hidden = false,
   const ids = [
     "milestoneDialog", "milestoneTitle", "milestoneDetails", "closeMilestone", "token", "tokenLabel", "authPanel", "authNotice", "connect", "notice", "connection", "dot", "globalRun", "running", "pending", "done",
     "total", "badge", "runner", "updated", "stop", "tasks", "logs", "refresh", "copyLogs", "intakeRunState", "productReports", "productCopy", "productDelete", "productClear", "qualityReports", "qualityCopy", "qualityDelete", "qualityClear",
-    "navOverview", "navExecution", "navMonitor", "navRequirements", "navLanes", "navModels", "pageOverview", "pageExecution", "pageMonitor", "pageRequirements", "pageLanes", "pageModels", "modelSummary", "openModels", "closeModels", "reloadModels", "saveModels", "modelScope", "modelSearch", "modelInherit", "modelDialog", "modelGroups", "modelMessage", "logLimit", "logFilter", "followLogs", "logCount", "agentCards", "githubStatus", "autoMerge", "updateStatus", "updateTool", "projectPhaseTitle", "projectPhaseDetail", "projectPhaseCount", "roadmapCards", "developmentLane", "productLane", "qualityLane", "lessonsStatus", "openProduct", "openQuality", "productDialog", "qualityDialog", "closeProduct", "closeQuality", "runProduct", "runQuality", "productRunState", "qualityRunState", "productReport", "qualityReport", "projectProgress", "projectProgressFill", "themeToggle", "openIntake", "intakeDialog", "intakeSummary", "queueList", "closeIntake", "requirement", "assessIntake", "intakeResult", "queueReady", "intakeMilestone", "submitIntake", "clearIntake", "draftList", "batchDrafts", "saveDraft", "saveAnswers", "requirementField", "assessingHint", "reassessIntake",
+    "navOverview", "navExecution", "navMonitor", "navRequirements", "navLanes", "navModels", "pageOverview", "pageExecution", "pageMonitor", "pageRequirements", "pageLanes", "pageModels", "modelSummary", "openModels", "closeModels", "reloadModels", "saveModels", "modelScope", "modelSearch", "modelInherit", "modelDialog", "modelGroups", "modelMessage", "logLimit", "logFilter", "followLogs", "logCount", "agentCards", "githubStatus", "autoMerge", "updateStatus", "updateHint", "updateTool", "projectPhaseTitle", "projectPhaseDetail", "projectPhaseCount", "roadmapCards", "developmentLane", "productLane", "qualityLane", "lessonsStatus", "openProduct", "openQuality", "productDialog", "qualityDialog", "closeProduct", "closeQuality", "runProduct", "runQuality", "productRunState", "qualityRunState", "productReport", "qualityReport", "projectProgress", "projectProgressFill", "themeToggle", "openIntake", "intakeDialog", "intakeSummary", "queueList", "closeIntake", "requirement", "assessIntake", "intakeResult", "queueReady", "intakeMilestone", "submitIntake", "clearIntake", "draftList", "batchDrafts", "saveDraft", "saveAnswers", "requirementField", "assessingHint", "reassessIntake",
   ];
   const elements = Object.fromEntries(ids.map(id => [id, node()]));
   const actions = ["start", "loop", "watch"].map(command => {
@@ -609,6 +609,7 @@ test("one GitHub update button checks first, then applies and reports progress",
   app.elements.connect.dispatch("click");
   await tick();
   assert.match(app.elements.updateStatus.textContent, /有更新可用 · behind 2/);
+  assert.equal(app.elements.updateHint.textContent, "（可更新）");
 
   app.elements.updateTool.dispatch("click");
   await tick();
@@ -616,7 +617,8 @@ test("one GitHub update button checks first, then applies and reports progress",
 
   const actions = app.requests.filter(request => request.path === "/api/update").map(request => JSON.parse(request.options.body).action);
   assert.deepEqual(actions, ["check", "apply"]);
-  assert.match(app.elements.updateStatus.textContent, /已更新到 22222222 · 重启控制台后生效/);
+  assert.match(app.elements.updateStatus.textContent, /已更新到 22222222 · 控制台正在重启/);
+  assert.equal(app.elements.updateHint.textContent, "（无需更新）");
   assert.equal(app.elements.updateTool.disabled, false);
 });
 

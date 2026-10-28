@@ -249,6 +249,34 @@ function call(port, { path, method = "GET", token = TOKEN, origin, body } = {}) 
   });
 }
 
+test("applying an update asks the caller to restart the dashboard", async () => {
+  const root = await tempRoot("soxu-update-restart-");
+  let restarts = 0;
+  const coordinator = Object.assign(Object.create(DashboardCoordinator.prototype), {
+    root, instanceId: "restart-test", lines: [], serial: 0,
+    refreshUpdate: async () => ({ status: "ok", available: true, behind: 1 }),
+    applyUpdate: async () => ({ status: "updated", previous: "11111111", current: "22222222", restartRequired: true }),
+  });
+  const { server, stopStreams } = createDashboardServer({
+    root, token: TOKEN, coordinator,
+    restart: async () => { restarts += 1; },
+  });
+  await new Promise(ok => server.listen(0, "127.0.0.1", ok));
+  const port = server.address().port;
+  const origin = "http://127.0.0.1:" + port;
+  try {
+    const result = await call(port, { path: "/api/update", method: "POST", origin, body: { action: "apply" } });
+    assert.equal(result.status, 200);
+    assert.equal(result.body.status, "updated");
+    assert.equal(result.body.restarting, true);
+    await waitFor(() => restarts === 1, { label: "restart callback" });
+  } finally {
+    stopStreams();
+    await new Promise(ok => server.close(ok));
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
 test("update endpoint enforces auth, origin and a strict action body", async () => {
   const root = await tempRoot("soxu-update-api-");
   const calls = [];
