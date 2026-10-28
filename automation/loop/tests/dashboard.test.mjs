@@ -237,6 +237,28 @@ test("report deletion enforces authentication, origin and lane-scoped filenames"
   }finally{await new Promise(resolve=>server.close(resolve));await cleanup(root,coordinator);}
 });
 
+test("snapshot keeps the update badge fresh without a manual check", async () => {
+  const root = await fixture();
+  let checks = 0;
+  const coordinator = new DashboardCoordinator({
+    root,
+    githubStatus: async () => ({}),
+    checkToolUpdate: async () => { checks += 1; return { status: "ok", available: true, behind: 1, toolVersion: "0.1.0" }; },
+  });
+  try {
+    coordinator.github = { status: "ok", updatedAt: null, tasks: {} };
+    coordinator.githubNext = Date.now() + 60000;
+    await coordinator.snapshot();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(checks, 1, "snapshot must trigger one background check");
+    const snapshot = await coordinator.snapshot();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(checks, 1, "cached result must not re-run within 60s");
+    assert.equal(snapshot.update.available, true);
+    assert.equal(snapshot.update.behind, 1);
+  } finally { await cleanup(root, coordinator); }
+});
+
 test("snapshot falls back to a local roadmap when GitHub is unavailable", async () => {
   const root = await fixture();
   const coordinator = new DashboardCoordinator({ root, githubStatus: async () => { throw new Error("gh unavailable"); } });
