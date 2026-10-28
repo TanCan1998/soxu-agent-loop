@@ -75,13 +75,36 @@ function showConfirmDialog({ message, input = null, confirmText = "确认", dang
       dialog.close();
       $("confirmAccept").removeEventListener("click", accept);
       $("confirmCancel").removeEventListener("click", cancel);
+      dialog.removeEventListener("click", backdrop);
       resolve(value);
     };
     const accept = () => finish(input === null ? true : $("confirmInput").value.trim());
     const cancel = () => finish(input === null ? false : null);
+    // 非输入性确认（askConfirm）：点击弹窗外即取消；输入性确认（askText）必须显式操作，
+    // 避免误点丢掉已输入的内容。
+    const backdrop = event => {
+      if (input !== null) return;
+      if (!clickedOutside(dialog, event)) return;
+      cancel();
+    };
     $("confirmAccept").addEventListener("click", accept);
     $("confirmCancel").addEventListener("click", cancel);
+    dialog.addEventListener("click", backdrop);
     dialog.showModal();
+  });
+}
+/** 点击是否落在弹窗盒子之外（背板）。点击弹窗内边距不算外部，避免误关。 */
+function clickedOutside(dialog, event) {
+  if (event.target !== dialog) return false;
+  const rect = dialog.getBoundingClientRect?.();
+  if (!rect) return true;
+  const { clientX: x, clientY: y } = event;
+  return x < rect.left || x > rect.right || y < rect.top || y > rect.bottom;
+}
+/** 非输入性弹窗：点击背板即关闭。 */
+function dismissOnBackdrop(dialog, close) {
+  dialog.addEventListener("click", event => {
+    if (clickedOutside(dialog, event)) close();
   });
 }
 function askConfirm(message, options = {}) {
@@ -1098,6 +1121,12 @@ tokenInput.addEventListener("input", () => {
 for (const button of document.querySelectorAll("[data-command]"))
   button.addEventListener("click", () => void execute(button.dataset.command));
 $("publishButton").addEventListener("click", () => { $("publishMenu").hidden = !$("publishMenu").hidden; });
+// 点气泡外部任意位置收起菜单（点击发布按钮本身交给上面的开关处理）。
+document.addEventListener("click", event => {
+  if ($("publishMenu").hidden) return;
+  if (event?.target?.closest?.(".flip-wrap")) return;
+  $("publishMenu").hidden = true;
+});
 for (const [id, mode] of [["publishPreview", "preview"], ["publishRelease", "release"]]) {
   $(id).addEventListener("click", async () => {
     if (!connected) return notice("先连接本地控制台。");
@@ -1136,6 +1165,9 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 $("closeMilestone").addEventListener("click",()=>$("milestoneDialog").close());
+// 里程碑 / 产品 / 质量报告只读，没有输入：点外部直接关闭。
+for (const id of ["milestoneDialog", "productDialog", "qualityDialog"])
+  dismissOnBackdrop($(id), () => $(id).close());
 const savedToken = restoreToken();
 if (savedToken) {
   tokenInput.value = savedToken;

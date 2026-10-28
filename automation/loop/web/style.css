@@ -134,3 +134,17 @@ html{scrollbar-width:thin;scrollbar-color:#ffffff24 transparent}
 html:hover{scrollbar-color:#ffffff3d transparent}
 [data-theme="light"] ::-webkit-scrollbar-thumb{background:#0000002b;background-clip:padding-box}
 [data-theme="light"] ::-webkit-scrollbar-thumb:hover{background:#00000040;background-clip:padding-box}
+
+/* 发布气泡改到按钮右侧；窄屏回退到下方，避免溢出屏幕 */
+.flip-menu{top:50%;right:auto;left:calc(100% + 10px);transform:translateY(-50%)}
+.flip-menu::before{top:calc(50% - 5px);right:auto;left:-5px;border-left:1px solid var(--border);border-bottom:1px solid var(--border);border-top:none}
+@media (max-width:720px){
+  .flip-menu{top:calc(100% + 8px);left:auto;right:0;transform:none}
+  .flip-menu::before{top:-5px;left:auto;right:22px;border-left:1px solid var(--border);border-top:1px solid var(--border);border-bottom:none}
+}
+
+/* 模型弹窗：外层固定不滚动，只有内层列表滚动（避免双滚动条） */
+#modelDialog{display:flex;flex-direction:column;overflow:hidden}
+#modelDialog .model-groups{flex:1 1 auto;min-height:0;max-height:none;overflow:auto;overscroll-behavior:contain}
+#modelDialog .dialog-head,#modelDialog > p,#modelDialog > label,#modelDialog > select,#modelDialog > input{flex:0 0 auto}
+#modelDialog .dialog-actions{flex:0 0 auto;margin-top:16px}
