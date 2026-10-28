@@ -818,3 +818,48 @@ test("the publish menu gates release on dev being merged into main", async () =>
   assert.match(portable.elements.publishRelease.getAttribute("data-tip"), /PR/);
 });
 
+test("the publish bubble closes when clicking outside it", async () => {
+  const view = page();
+  view.elements.token.value = TOKEN;
+  view.elements.connect.dispatch("click");
+  await tick();
+  view.elements.publishMenu.hidden = false;
+  view.document.dispatch("click");
+  assert.equal(view.elements.publishMenu.hidden, true, "outside click dismisses the bubble");
+});
+
+test("a confirm dialog without input cancels on a backdrop click", async () => {
+  const view = page();
+  view.elements.token.value = TOKEN;
+  view.elements.connect.dispatch("click");
+  await tick();
+  let closed = false;
+  // 关掉测试桩的自动应答，改由背板点击驱动。
+  view.elements.confirmDialog.showModal = () => { view.elements.confirmDialog.open = true; };
+  view.elements.confirmDialog.close = () => { closed = true; view.elements.confirmDialog.open = false; };
+  view.elements.stop.dispatch("click");
+  await tick();
+  assert.equal(view.elements.confirmDialog.open, true, "dialog is open before the backdrop click");
+  view.elements.confirmDialog.dispatch("click", { target: view.elements.confirmDialog, clientX: 4, clientY: 4 });
+  await tick();
+  assert.equal(closed, true, "backdrop click cancels a non-input confirm");
+  assert.equal(view.requests.filter(r => r.path === "/api/stop").length, 0, "cancelled action never runs");
+});
+
+test("a click inside the dialog box does not dismiss it", async () => {
+  const view = page();
+  view.elements.token.value = TOKEN;
+  view.elements.connect.dispatch("click");
+  await tick();
+  let closed = false;
+  view.elements.confirmDialog.showModal = () => { view.elements.confirmDialog.open = true; };
+  view.elements.confirmDialog.close = () => { closed = true; };
+  view.elements.stop.dispatch("click");
+  await tick();
+  // 点在弹窗盒子内部（非背板）：不应关闭。
+  const dialog = view.elements.confirmDialog;
+  dialog.getBoundingClientRect = () => ({ left: 0, top: 0, right: 400, bottom: 300 });
+  dialog.dispatch("click", { target: dialog, clientX: 200, clientY: 150 });
+  await tick();
+  assert.equal(closed, false, "clicks inside the dialog keep it open");
+});
