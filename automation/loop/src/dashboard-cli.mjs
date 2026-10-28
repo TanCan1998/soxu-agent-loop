@@ -2,7 +2,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawn } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { setTimeout as sleep } from "node:timers/promises";
 import { DASHBOARD_PORT, dashboardToken, createDashboardServer, isLoopbackHost } from "./dashboard.mjs";
 import { networkInterfaces } from "node:os";
@@ -26,6 +27,20 @@ async function healthy() {
     return response.ok;
   } catch { return false; }
 }
+
+const execFileAsync = promisify(execFile);
+/** 工具仓库当前检出的提交；读不到（非 git 检出/权限）时返回 null 表示无法监控。 */
+async function toolCommit() {
+  try {
+    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: TOOL_ROOT, timeout: 8000, windowsHide: true });
+    return stdout.trim() || null;
+  } catch { return null; }
+}
+/**
+ * 启动时记录 boot 提交。磁盘检出被更新（热更新按钮、git pull、合并 PR）后进程仍在跑旧代码，
+ * 这里定期比对并自动重启，避免"已是最新"却仍是旧服务的情况。
+ */
+const bootCommit = await toolCommit();
 
 let relaunching = false;
 /**
@@ -91,3 +106,20 @@ server.listen(port, host, () => {
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.once(signal, () => { coordinator.shutdown(); stopStreams(); server.close(); });
 }
+
+/**
+ * 自动重启看门狗：只在"磁盘代码已变、进程还是旧的"时动作。
+ * - 同一提交只尝试一次，避免替换失败后无限重启；
+ * - 正在应用热更新时跳过，交给 update 流程自己的重启，避免打断冒烟检查。
+ */
+let restartedFor = null;
+async function watchToolCommit() {
+  if (relaunching || !bootCommit || coordinator.applyingUpdate) return;
+  const current = await toolCommit();
+  if (!current || current === bootCommit || current === restartedFor) return;
+  restartedFor = current;
+  console.log("Tool checkout moved to " + current.slice(0, 8) + "; restarting to load the updated code...");
+  try { await relaunch(); }
+  catch (error) { console.error("auto-restart failed: " + (error?.message ?? error)); }
+}
+if (bootCommit) setInterval(() => { void watchToolCommit(); }, 10_000).unref();
