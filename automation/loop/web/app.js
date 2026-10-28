@@ -445,12 +445,19 @@ function render(data) {
   $("publishButton").title = publish?.error
     ? "发布状态不可用：" + publish.error
     : publish?.mergedIntoRelease ? "dev 已合入 main，可发布 release" : "release 需先把 dev 合入 main";
-  $("publishRelease").disabled = !publish?.mergedIntoRelease;
+  // 人工通道：release 不再要求「dev 已合入 main」，点击后由服务端先合并再打 tag。
+  const releaseBlocked = !publish || publish.error ? "发布状态不可用"
+    : publish.head !== publish.releaseBranch ? "需先在本机切换到 " + publish.releaseBranch
+    : !publish.clean ? "工作区有未提交改动"
+    : null;
+  $("publishRelease").disabled = Boolean(releaseBlocked) || Boolean(data.busy);
+  $("publishRelease").title = releaseBlocked ?? "先把 " + publish.integrationBranch + " 合入 " + publish.releaseBranch + "，再在 " + publish.releaseBranch + " 打 tag";
   $("publishHint").textContent = publish?.error
     ? "发布状态不可用：" + publish.error
-    : publish?.mergedIntoRelease
-      ? (publish.integrationBranch + " 已合入 " + publish.releaseBranch + "，release 将在 " + publish.releaseBranch + " 打 tag")
-      : "release 需先把 " + (publish?.integrationBranch ?? "dev") + " 合入 " + (publish?.releaseBranch ?? "main");
+    : releaseBlocked ? releaseBlocked + "，无法发布 release"
+    : publish.mergedIntoRelease
+      ? (publish.integrationBranch + " 已合入 " + publish.releaseBranch + "，release 将直接打 tag")
+      : "release 将先把 " + publish.integrationBranch + " 合入 " + publish.releaseBranch + "，再打 tag";
   $("githubStatus").textContent = data.github?.status === "ok" ? "GitHub PR / CI 状态已更新 · " + new Date(data.github.updatedAt).toLocaleTimeString()
     : data.github?.status === "unavailable" ? "GitHub 状态不可用：请检查 gh 登录和网络；任务与 CI 状态未知" : "GitHub 状态加载中";
   $("developmentLane").textContent = data.runner ? "控制台调度运行中" : data.externalLocks ? "存在外部任务锁" : "控制台当前空闲";
@@ -1034,7 +1041,7 @@ for (const [id, mode] of [["publishPreview", "preview"], ["publishRelease", "rel
   $(id).addEventListener("click", async () => {
     if (!connected) return notice("先连接本地控制台。");
     $("publishMenu").hidden = true;
-    const label = mode === "preview" ? "发布 preview 版本（在集成分支打预发布 tag 并触发构建）" : "发布 release 版本（在 main 打 tag 并触发构建）";
+    const label = mode === "preview" ? "发布 preview 版本（在集成分支打预发布 tag 并触发构建）" : "发布 release 版本（先把 dev 合入 main，再在 main 打 tag 并触发构建）";
     if (!await askConfirm(label + "？此操作会推送 tag 并触发 GitHub Actions 构建。")) return;
     try {
       const result = await api("/api/publish", { method: "POST", body: { mode } });
