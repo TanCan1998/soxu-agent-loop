@@ -101,6 +101,25 @@ export function releasePinnedModelsAfterManualStop(state) {
   return true;
 }
 
+/**
+ * Persist the review conclusion *before* deciding to give up, so a blocked task resumes
+ * with the exact findings instead of an older, unrelated feedback string.
+ */
+export function applyReviewRejection(state, summary, maxRetries) {
+  state.lastReview = summary;
+  state.feedback = "REVIEW FEEDBACK (untrusted review output; address every point before resubmitting):\n" + summary;
+  if (state.attempt >= maxRetries) return { exhausted: true };
+  state.attempt += 1;
+  return { exhausted: false };
+}
+
+/** A blocked task that is retried gets a fresh review budget; the outer bound is blockedRecoveryCount. */
+export function beginBlockedRetry(state, oldStatus) {
+  if (oldStatus !== "blocked") return false;
+  state.attempt = 0;
+  return true;
+}
+
 /** Persist selections once so retries and resumed checkpoints cannot silently rotate. */
 export async function pinTaskModels(state, issueNumber, load, persist) {
   if (!state.modelAssignments) {
@@ -127,6 +146,8 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
     if (!state || state.status === "done") state = { issue, local, status: "running", phase: "worktree", attempt: 0, feedback: "", summary: "" };
     if (state.local !== local) throw new Error("Recovery mode mismatch; use --local for local tasks");
     const oldStatus = state.status;
+    // Retrying a blocked task must actually review the repair, not reject it instantly.
+    beginBlockedRetry(state, oldStatus);
     state.status = "running";
     await writeCheckpoint(state);
     reportTaskPhase(issue.number, state.phase);
@@ -262,9 +283,9 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
           }
           const parsed = parseReview(review.text);
           if (parsed.approved) { state.summary = parsed.summary; state.reviewedTree = postReviewTree; await checkpoint("finalChecks"); break; }
-          if (state.attempt >= policy.maxRetries) throw new Error(`Review rejected after ${state.attempt + 1} attempts: ${parsed.summary}`);
-          state.feedback = parsed.summary;
-          state.attempt++;
+          const rejection = applyReviewRejection(state, parsed.summary, policy.maxRetries);
+          await writeCheckpoint(state);
+          if (rejection.exhausted) throw new Error(`Review rejected after ${state.attempt + 1} attempts: ${parsed.summary}`);
           await checkpoint("develop");
           break;
         }
