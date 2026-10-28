@@ -445,19 +445,17 @@ function render(data) {
   $("publishButton").title = publish?.error
     ? "发布状态不可用：" + publish.error
     : publish?.mergedIntoRelease ? "dev 已合入 main，可发布 release" : "release 需先把 dev 合入 main";
-  // 人工通道：release 不再要求「dev 已合入 main」，点击后由服务端先合并再打 tag。
-  const releaseBlocked = !publish || publish.error ? "发布状态不可用"
-    : publish.head !== publish.releaseBranch ? "需先在本机切换到 " + publish.releaseBranch
-    : !publish.clean ? "工作区有未提交改动"
-    : null;
+  // 人工通道：release 走 PR，不依赖本地检出状态，因此只有状态不可用或 Runner 忙时才禁用。
+  const releaseBlocked = !publish || publish.error ? "发布状态不可用" : null;
   $("publishRelease").disabled = Boolean(releaseBlocked) || Boolean(data.busy);
-  $("publishRelease").title = releaseBlocked ?? "先把 " + publish.integrationBranch + " 合入 " + publish.releaseBranch + "，再在 " + publish.releaseBranch + " 打 tag";
+  $("publishRelease").title = releaseBlocked ?? (publish.mergedIntoRelease
+    ? publish.integrationBranch + " 已合入 " + publish.releaseBranch + "，将直接在 " + publish.releaseBranch + " 打 tag"
+    : "将创建 " + publish.integrationBranch + "→" + publish.releaseBranch + " 的 PR，等必需检查通过后合并，再打 tag");
   $("publishHint").textContent = publish?.error
     ? "发布状态不可用：" + publish.error
-    : releaseBlocked ? releaseBlocked + "，无法发布 release"
-    : publish.mergedIntoRelease
+    : publish?.mergedIntoRelease
       ? (publish.integrationBranch + " 已合入 " + publish.releaseBranch + "，release 将直接打 tag")
-      : "release 将先把 " + publish.integrationBranch + " 合入 " + publish.releaseBranch + "，再打 tag";
+      : "release 将开 " + (publish?.integrationBranch ?? "dev") + "→" + (publish?.releaseBranch ?? "main") + " 的 PR，等必需检查通过后合并，再打 tag";
   $("githubStatus").textContent = data.github?.status === "ok" ? "GitHub PR / CI 状态已更新 · " + new Date(data.github.updatedAt).toLocaleTimeString()
     : data.github?.status === "unavailable" ? "GitHub 状态不可用：请检查 gh 登录和网络；任务与 CI 状态未知" : "GitHub 状态加载中";
   $("developmentLane").textContent = data.runner ? "控制台调度运行中" : data.externalLocks ? "存在外部任务锁" : "控制台当前空闲";

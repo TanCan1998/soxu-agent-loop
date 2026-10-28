@@ -759,7 +759,7 @@ test("the publish menu gates release on dev being merged into main", async () =>
   await tick();
   // 人工通道：未合入也允许点击，服务端会先合并再打 tag。
   assert.equal(view.elements.publishRelease.disabled, false, "manual release does not require a prior merge");
-  assert.match(view.elements.publishHint.textContent, /将先把 dev 合入 main/);
+  assert.match(view.elements.publishHint.textContent, /release 将开 dev→main 的 PR/);
   view.elements.publishPreview.dispatch("click");
   await tick();
   await tick();
@@ -774,13 +774,13 @@ test("the publish menu gates release on dev being merged into main", async () =>
   assert.equal(ready.elements.publishRelease.disabled, false);
   assert.match(ready.elements.publishHint.textContent, /已合入 main/);
 
-  // 本地不在 main 时仍应禁用，并说明原因。
-  const wrongBranch = { ...STATUS, publish: { integrationBranch: "dev", releaseBranch: "main", mergedIntoRelease: false, head: "dev", clean: true, version: "0.1.0" } };
-  const blocked = page({ handler: () => ({ ok: true, status: 200, json: async () => wrongBranch }) });
-  blocked.elements.token.value = TOKEN;
-  blocked.elements.connect.dispatch("click");
+  // 走 PR 后不依赖本地检出：即使本机在 dev 也可发布，且不要求工作区干净。
+  const elsewhere = { ...STATUS, publish: { integrationBranch: "dev", releaseBranch: "main", mergedIntoRelease: false, head: "dev", clean: false, version: "0.1.0" } };
+  const portable = page({ handler: () => ({ ok: true, status: 200, json: async () => elsewhere }) });
+  portable.elements.token.value = TOKEN;
+  portable.elements.connect.dispatch("click");
   await tick();
-  assert.equal(blocked.elements.publishRelease.disabled, true);
-  assert.match(blocked.elements.publishHint.textContent, /切换到 main/);
+  assert.equal(portable.elements.publishRelease.disabled, false, "release must not depend on local checkout state");
+  assert.match(portable.elements.publishRelease.title, /PR/);
 });
 
