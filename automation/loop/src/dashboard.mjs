@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { fork } from "node:child_process";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { networkInterfaces } from "node:os";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import { ROOT, TOOL_ROOT, integrationBase } from "./config.mjs";
@@ -109,6 +109,14 @@ async function inspectExternalLocks(root) {
     }
     let updatedAt = null;
     try { updatedAt = (await stat(path)).mtime.toISOString(); } catch { /* vanished */ }
+    // 进程已确认不存在（ESRCH）的锁是残留：任务被强杀时 finally 不会执行。
+    // 直接清掉，避免界面长期显示"检测到 N 个正在运行的工作树锁"。
+    // 只有明确 ESRCH 才删，读文件失败/权限错误一律保守保留。
+    if (readable && pid && !alive) {
+      try { await rm(path, { force: true }); } catch { /* 保留，下次再试 */ }
+      locks.push({ file, pid, startedAt, updatedAt, stale: true, removed: true });
+      continue;
+    }
     locks.push({ file, pid, startedAt, updatedAt, stale: !alive });
   }
   return {

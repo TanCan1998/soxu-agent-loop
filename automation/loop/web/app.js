@@ -654,7 +654,7 @@ function render(data) {
   $("badge").dataset.state = data.runner ? (data.runner.stopping ? "stopping" : "running") : data.externalLocks ? "external" : "idle";
   $("badge").textContent = data.runner ? (data.runner.stopping ? "停止中" : "运行中") : "空闲";
   $("runner").textContent = data.runner ? "正在执行 " + data.runner.command + " · 开始于 " + new Date(data.runner.startedAt).toLocaleTimeString()
-    : data.externalLocks ? "检测到 " + data.externalLocks + " 个正在运行的工作树锁（此处不能停止）"
+    : data.externalLocks ? "检测到 " + data.externalLocks + " 个任务锁由其他进程持有（PID 仍存活，此处不能停止）"
     : data.lastRun ? "上次执行 " + data.lastRun.command + " · 退出码 " + (data.lastRun.exitCode ?? "未知") : "未启动调度";
   $("updated").textContent = "更新于 " + new Date(data.generatedAt).toLocaleTimeString();
   for (const button of document.querySelectorAll("[data-command]")) button.disabled = data.busy;
@@ -992,7 +992,14 @@ function draftQuestions(a) {
 function draftRow(d) {
   const row=element("div",undefined,"queue-item");
   row.dataset.draftId = d.id;
-  row.draggable = d.status === "review"; // 仅可提交的草稿能拖动排序
+  // 除"结果待核实/提交中"外都能排序；拖动走 Pointer 事件，触摸屏同样可用。
+  row.dataset.draggable = ["unknown", "submitting"].includes(d.status) ? "0" : "1";
+  if (row.dataset.draggable === "1") {
+    const handle = element("span", "⠿", "drag-handle");
+    handle.setAttribute("data-drag-handle", "");
+    handle.setAttribute("aria-hidden", "true");
+    row.append(handle);
+  }
   const label=element("label"), box=element("input");box.type="checkbox";box.checked=selectedDrafts.has(d.id);box.disabled=d.status!=="review" || !Array.isArray(d.answers) || draftState.busy;box.addEventListener("change",()=>{if(box.checked)selectedDrafts.add(d.id);else selectedDrafts.delete(d.id);});label.append(box,document.createTextNode(" "+(d.assessment?.title || d.requirement.slice(0,60))+" · "+({draft:"草稿",review:d.answers?"可提交":"待确认",assessing:"评估中",submitting:"提交中",submitted:"已提交",unknown:"结果待核实"}[d.status]||d.status)));row.append(label);
   for(const [text,action,disabled] of [["编辑",()=>openDraft(d),["unknown","submitted","submitting"].includes(d.status)],["上移",()=>draftAction("move",{id:d.id,direction:-1}),false],["下移",()=>draftAction("move",{id:d.id,direction:1}),false],["删除",async()=>{if(await askConfirm("删除这个草稿？"))void draftAction("remove",{id:d.id});},d.status==="unknown"]]){const b=element("button",text);b.disabled=disabled||draftState.busy;b.addEventListener("click",action);row.append(b);}
   // 队列内直接切换 ready，不必进弹窗
@@ -1335,37 +1342,46 @@ $("reassessIntake").addEventListener("click",async()=>{
 $("submitIntake").addEventListener("click",async()=>{if(!await askConfirm("确认提交该需求？"))return;if(!await saveDraftAnswers())return;await draftAction("batch",{ids:[editingDraft]});});
 $("batchDrafts").addEventListener("click",async()=>{const ids=[...selectedDrafts];if(!ids.length)return notice("请先选择已完成确认的草稿。");if(!await askConfirm(`确认按队列顺序提交 ${ids.length} 项需求？提交前会自动校验前置依赖。`))return;const result=await draftAction("batch",{ids});if(result){selectedDrafts.clear();lastDraftKey="";renderDrafts(result);const blocked=(result.items||[]).filter(x=>ids.includes(x.id)&&x.status==="blocked");if(blocked.length)notice("有 "+blocked.length+" 项依赖校验未通过，已标为阻塞并在列表中标出缺失项。");}});
 
-// 拖动排序：把草稿拖到另一行之前（或末尾）
+/**
+ * 拖动排序：按住行首的 ⠿ 手柄拖动。用 Pointer 事件实现，鼠标与触摸屏都可用
+ * ——HTML5 drag&drop 在移动端浏览器里根本不触发，这是之前"拖动没反应"的原因。
+ */
 (() => {
   const list = $("draftList");
-  let dragId = null;
-  list.addEventListener("dragstart", event => {
-    const row = event.target?.closest?.("[data-draft-id]");
-    if (!row || row.draggable !== true) { event.preventDefault?.(); return; }
-    dragId = row.dataset.draftId;
+  let drag = null;
+  const rows = () => [...list.querySelectorAll?.("[data-draft-id]") ?? []];
+  const clear = () => { for (const r of rows()) r.classList.remove("dragging", "drop-target"); };
+  list.addEventListener("pointerdown", event => {
+    const handle = event.target?.closest?.("[data-drag-handle]");
+    const row = handle?.closest?.("[data-draft-id]");
+    if (!row || row.dataset.draggable !== "1") return;
+    event.preventDefault?.();
+    drag = { id: row.dataset.draftId, row, pointerId: event.pointerId };
     row.classList.add("dragging");
-    event.dataTransfer?.setData?.("text/plain", dragId);
-    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+    try { handle.setPointerCapture?.(event.pointerId); } catch { /* unsupported */ }
   });
-  list.addEventListener("dragover", event => {
-    if (!dragId) return;
+  list.addEventListener("pointermove", event => {
+    if (!drag || event.pointerId !== drag.pointerId) return;
     event.preventDefault?.();
-    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    const over = document.elementFromPoint?.(event.clientX, event.clientY)?.closest?.("[data-draft-id]");
+    for (const r of rows()) r.classList.toggle("drop-target", Boolean(over) && r === over && r !== drag.row);
   });
-  list.addEventListener("drop", async event => {
-    if (!dragId) return;
-    event.preventDefault?.();
-    const targetRow = event.target?.closest?.("[data-draft-id]");
-    const beforeId = targetRow && targetRow.dataset.draftId !== dragId ? targetRow.dataset.draftId : null;
-    const moved = dragId;
-    dragId = null;
-    try { const result = await draftAction("reorder", { id: moved, beforeId }); if (result) { lastDraftKey = ""; renderDrafts(result); } }
-    catch (error) { notice("排序失败：" + error.message); }
-  });
-  list.addEventListener("dragend", () => {
-    dragId = null;
-    for (const row of list.querySelectorAll?.("[data-draft-id]") ?? []) row.classList.remove("dragging");
-  });
+  const finish = async event => {
+    if (!drag || (event?.pointerId !== undefined && event.pointerId !== drag.pointerId)) return;
+    const over = document.elementFromPoint?.(event.clientX, event.clientY)?.closest?.("[data-draft-id]");
+    const beforeId = over && over !== drag.row ? over.dataset.draftId : null;
+    const moved = drag.id;
+    drag = null;
+    clear();
+    try {
+      const result = await draftAction("reorder", { id: moved, beforeId });
+      if (result) { lastDraftKey = ""; renderDrafts(result); notice("已按新顺序保存。"); }
+    } catch (error) { notice("排序失败：" + error.message); }
+  };
+  list.addEventListener("pointerup", finish);
+  list.addEventListener("pointercancel", () => { drag = null; clear(); });
+  // 触摸拖动时阻止页面跟着滚动
+  list.addEventListener("touchmove", event => { if (drag) event.preventDefault?.(); }, { passive: false });
 })();
 (function initializePreferences() {
   showPage(stored(preferenceStorage,PAGE_KEY) || "Overview");
