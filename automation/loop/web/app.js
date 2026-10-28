@@ -251,7 +251,13 @@ function mountScrollIndicator(scroller = null) {
 function mountScrollIndicators() {
   try {
     // 触摸设备（安卓/平板）不画指示条：占位置又挡内容。
-    if (window.matchMedia?.("(pointer: coarse)")?.matches) return;
+    // 除 media query 外再看 maxTouchPoints 与 UA，覆盖 media feature 不生效的 WebView。
+    const mq = window.matchMedia;
+    const touch = mq?.("(pointer: coarse)")?.matches
+      || mq?.("(hover: none)")?.matches
+      || (navigator.maxTouchPoints ?? 0) > 0
+      || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent ?? "");
+    if (touch) return;
     // 经典滚动条环境（桌面 Chrome/Edge）由 ::-webkit-scrollbar 负责，不重复画。
     if (window.innerWidth - document.documentElement.clientWidth > 0) return;
     // overlay 滚动条环境：原生滚动条会浮在自绘指示条之上，先把它彻底隐藏。
