@@ -46,7 +46,7 @@ function page({ storage = new Map(), handler = () => response(), hidden = false,
   const ids = [
     "milestoneDialog", "milestoneTitle", "milestoneDetails", "closeMilestone", "token", "tokenLabel", "authPanel", "authNotice", "connect", "notice", "connection", "dot", "globalRun", "running", "pending", "done",
     "total", "badge", "runner", "updated", "stop", "tasks", "logs", "refresh", "copyLogs", "intakeRunState", "productReports", "productCopy", "productDelete", "productClear", "qualityReports", "qualityCopy", "qualityDelete", "qualityClear",
-    "navOverview", "navExecution", "navMonitor", "navRequirements", "navLanes", "navModels", "pageOverview", "pageExecution", "pageMonitor", "pageRequirements", "pageLanes", "pageModels", "modelSummary", "openModels", "closeModels", "reloadModels", "saveModels", "modelScope", "modelSearch", "modelInherit", "modelDialog", "modelGroups", "modelMessage", "logLimit", "logFilter", "followLogs", "logCount", "agentCards", "githubStatus", "autoMerge", "updateStatus", "updateHint", "updateTool", "projectPhaseTitle", "projectPhaseDetail", "projectPhaseCount", "roadmapCards", "developmentLane", "productLane", "qualityLane", "lessonsStatus", "openProduct", "openQuality", "productDialog", "qualityDialog", "closeProduct", "closeQuality", "runProduct", "runQuality", "productRunState", "qualityRunState", "productReport", "qualityReport", "projectProgress", "projectProgressFill", "themeToggle", "openIntake", "intakeDialog", "intakeSummary", "queueList", "closeIntake", "requirement", "assessIntake", "intakeResult", "queueReady", "intakeMilestone", "submitIntake", "clearIntake", "draftList", "batchDrafts", "saveDraft", "saveAnswers", "requirementField", "assessingHint", "reassessIntake",
+    "navOverview", "navExecution", "navMonitor", "navRequirements", "navLanes", "navModels", "pageOverview", "pageExecution", "pageMonitor", "pageRequirements", "pageLanes", "pageModels", "modelSummary", "openModels", "closeModels", "reloadModels", "saveModels", "modelScope", "modelSearch", "modelInherit", "modelDialog", "modelGroups", "modelMessage", "logLimit", "logFilter", "followLogs", "logCount", "agentCards", "githubStatus", "autoMerge", "updateStatus", "updateTool", "projectPhaseTitle", "projectPhaseDetail", "projectPhaseCount", "roadmapCards", "developmentLane", "productLane", "qualityLane", "lessonsStatus", "openProduct", "openQuality", "productDialog", "qualityDialog", "closeProduct", "closeQuality", "runProduct", "runQuality", "productRunState", "qualityRunState", "productReport", "qualityReport", "projectProgress", "projectProgressFill", "themeToggle", "openIntake", "intakeDialog", "intakeSummary", "queueList", "closeIntake", "requirement", "assessIntake", "intakeResult", "queueReady", "intakeMilestone", "submitIntake", "clearIntake", "draftList", "batchDrafts", "saveDraft", "saveAnswers", "requirementField", "assessingHint", "reassessIntake",
   ];
   const elements = Object.fromEntries(ids.map(id => [id, node()]));
   const actions = ["start", "loop", "watch"].map(command => {
@@ -598,27 +598,38 @@ test("a fixed non-hex token connects and is restored from session storage", asyn
   assert.equal(bad.requests.length, 0);
 });
 
-test("one GitHub update button checks first, then applies and reports progress", async () => {
-  const snapshot = { ...STATUS, protocolVersion: 1, update: { status: "ok", available: true, behind: 2, toolVersion: "0.1.0" } };
+test("the update button checks when current and applies when an update is available", async () => {
+  // Available update: one click applies directly.
+  const behind = { ...STATUS, protocolVersion: 1, update: { status: "ok", available: true, behind: 2, comparison: "main → origin/main", toolVersion: "0.1.0" } };
   const app = page({ handler: path => path === "/api/status"
-    ? { ok: true, status: 200, json: async () => snapshot }
-    : { ok: true, status: 200, json: async () => (app.requests.filter(request => request.path === "/api/update").length === 1
-      ? { status: "ok", available: true, behind: 2, protocolVersion: 1 }
-      : { status: "updated", previous: "11111111", current: "2222222222", toolVersion: "0.2.0", protocolVersion: 1, restartRequired: true }) } });
+    ? { ok: true, status: 200, json: async () => behind }
+    : { ok: true, status: 200, json: async () => ({ status: "updated", previous: "11111111", current: "2222222222", toolVersion: "0.2.0", protocolVersion: 1, restarting: true }) } });
   app.elements.token.value = TOKEN;
   app.elements.connect.dispatch("click");
   await tick();
-  assert.match(app.elements.updateStatus.textContent, /有更新可用 · behind 2/);
-  assert.equal(app.elements.updateHint.textContent, "（可更新）");
-
+  assert.match(app.elements.updateStatus.textContent, /有更新可用 · behind 2 · main → origin\/main/);
+  assert.match(app.elements.updateTool.title, /（可更新）/);
   app.elements.updateTool.dispatch("click");
   await tick();
   await tick();
-
-  const actions = app.requests.filter(request => request.path === "/api/update").map(request => JSON.parse(request.options.body).action);
-  assert.deepEqual(actions, ["check", "apply"]);
+  assert.deepEqual(app.requests.filter(request => request.path === "/api/update").map(request => JSON.parse(request.options.body).action), ["apply"]);
   assert.match(app.elements.updateStatus.textContent, /已更新到 22222222 · 控制台正在重启/);
-  assert.equal(app.elements.updateHint.textContent, "（无需更新）");
+  assert.match(app.elements.updateTool.title, /（无需更新）/);
   assert.equal(app.elements.updateTool.disabled, false);
+
+  // Already current: the click only checks.
+  const current = { ...STATUS, protocolVersion: 1, update: { status: "ok", available: false, behind: 0, comparison: "main → origin/main", toolVersion: "0.1.0" } };
+  const view = page({ handler: path => path === "/api/status"
+    ? { ok: true, status: 200, json: async () => current }
+    : { ok: true, status: 200, json: async () => ({ status: "ok", available: false, behind: 0, comparison: "main → origin/main", protocolVersion: 1 }) } });
+  view.elements.token.value = TOKEN;
+  view.elements.connect.dispatch("click");
+  await tick();
+  assert.match(view.elements.updateTool.title, /（无需更新）/);
+  view.elements.updateTool.dispatch("click");
+  await tick();
+  assert.deepEqual(view.requests.filter(request => request.path === "/api/update").map(request => JSON.parse(request.options.body).action), ["check"]);
+  assert.match(view.elements.notice.textContent, /已是最新/);
 });
+
 
