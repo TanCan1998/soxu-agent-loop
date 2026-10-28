@@ -250,6 +250,8 @@ function mountScrollIndicator(scroller = null) {
 }
 function mountScrollIndicators() {
   try {
+    // 触摸设备（安卓/平板）不画指示条：占位置又挡内容。
+    if (window.matchMedia?.("(pointer: coarse)")?.matches) return;
     // 经典滚动条环境（桌面 Chrome/Edge）由 ::-webkit-scrollbar 负责，不重复画。
     if (window.innerWidth - document.documentElement.clientWidth > 0) return;
     // overlay 滚动条环境：原生滚动条会浮在自绘指示条之上，先把它彻底隐藏。
@@ -1059,20 +1061,42 @@ function renderQueue() {
     // 已创建需求也能直接切换 ready（打标签前服务端会做依赖校验）
     if (item.state === "OPEN") {
       const isReady = (item.labels || []).includes("agent:ready");
-      const box = element("input"); box.type = "checkbox"; box.checked = isReady;
+      const box = element("input");
+      box.type = "checkbox";
+      box.checked = isReady;
+      // 用 class 表达选中态，不用 :has()（部分安卓 WebView 不支持）
+      const tag = element("label", undefined, isReady ? "queue-ready-toggle on" : "queue-ready-toggle");
+      const label = document.createTextNode(isReady ? " 就绪" : " 未就绪");
+      const setState = on => {
+        box.checked = on;
+        if (on) tag.classList.add("on"); else tag.classList.remove("on");
+        label.nodeValue = on ? " 就绪" : " 未就绪";
+      };
       box.addEventListener("change", async () => {
+        const want = box.checked;
+        box.disabled = true;
+        setState(want); // 乐观更新，先给出反馈
         try {
-          const result = await api("/api/queue-ready", { method: "POST", body: { number: item.number, ready: box.checked } });
-          if (result?.ok) notice(box.checked ? `#${item.number} 已标为可执行。` : `#${item.number} 已取消可执行。`);
-          else notice(`#${item.number} 不能标为可执行：` + (result?.missing?.length ? "依赖缺失 " + result.missing.join("、") : (result?.reason ?? "未知原因")));
-          await refresh();
+          const result = await api("/api/queue-ready", { method: "POST", body: { number: item.number, ready: want } });
+          if (result?.ok) {
+            notice(want ? `#${item.number} 已标为可执行。` : `#${item.number} 已取消可执行。`);
+            lastQueueKey = "";
+            await refresh();
+          } else {
+            setState(!want);
+            const why = result?.missing?.length ? "依赖缺失 " + result.missing.join("、")
+              : result?.reason === "issue-closed" ? "该需求已关闭"
+              : result?.message ?? result?.reason ?? "未知原因";
+            notice(`#${item.number} 不能标为可执行：` + why);
+          }
         } catch (error) {
-          box.checked = !box.checked;
+          setState(!want);
           notice("更新可执行状态失败：" + error.message);
+        } finally {
+          box.disabled = false;
         }
       });
-      const tag = element("label", undefined, "queue-ready-toggle");
-      tag.append(box, document.createTextNode(" 就绪"));
+      tag.append(box, label);
       row.append(tag);
     }
     queue.append(row);
