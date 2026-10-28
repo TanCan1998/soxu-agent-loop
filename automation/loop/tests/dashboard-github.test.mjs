@@ -1,6 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildGithubStatus, enrichActiveChecks } from "../src/dashboard-github.mjs";
+test("an open issue whose PR merged into the integration branch counts as merged", () => {
+  const catalog = [{ id: "TASK-011", number: 11, title: "Eleven", dependencies: [], priority: "P1" }];
+  const prs = [{ number: 90, state: "MERGED", mergedAt: "2026-10-28T00:00:00Z", baseRefName: "dev", body: "Closes #11", headRefName: "agent/x", url: "https://github.com/a/b/pull/90" }];
+  const open = [{ number: 11, state: "OPEN", title: "[M2] [TASK-011] Eleven", labels: [], milestone: { title: "M2" } }];
+  const snapshot = buildGithubStatus(catalog, open, prs, "dev");
+  assert.equal(snapshot["TASK-011"].pr.number, 90, "per-task PR lookup must follow the integration branch");
+  assert.equal(snapshot.__roadmap.stages.find(stage => stage.id === "M2").merged, 1, "merged into dev counts even while the issue is open");
+  // Same PR is invisible when the integration branch is main.
+  assert.equal(buildGithubStatus(catalog, open, prs, "main")["TASK-011"].pr, null);
+});
 
 test("PR checks and unresolved dependencies reflect GitHub evidence", () => {
   const catalog=[{id:"TASK-001",dependencies:[]},{id:"TASK-002",dependencies:["TASK-001"]}];

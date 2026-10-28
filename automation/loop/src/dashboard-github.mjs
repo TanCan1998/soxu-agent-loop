@@ -20,12 +20,14 @@ export function buildGithubStatus(catalog, issues, prs, base = "main") {
   const merged = mergedIssueNumbers(prs, base);
   const completed = new Set(catalog.filter(t => {
     const issue = byTask.get(t.id);
-    return issue?.state === "CLOSED" && merged.has(issue.number);
+    // Merged into the integration branch is the completion signal (issue may stay open
+    // until the loop closes it, because main is the default branch).
+    return Boolean(issue) && merged.has(issue.number);
   }).map(t => t.id));
   const tasks = {};
   for (const task of catalog) {
     const issue = byTask.get(task.id);
-    const matches = issue ? prs.filter(pr => pr.baseRefName === "main" &&
+    const matches = issue ? prs.filter(pr => pr.baseRefName === base &&
       new RegExp(`(?:^|\\n)\\s*(?:closes|closed|close|fixes|fixed|fix|resolves|resolved|resolve)\\s+#${issue?.number}\\b`, "im").test(String(pr.body ?? ""))) : [];
     const pr = matches.find(p => p.state === "OPEN") ?? matches.find(p => p.mergedAt) ?? null;
     let ci = "unknown";
@@ -66,7 +68,7 @@ export function buildGithubStatus(catalog, issues, prs, base = "main") {
     if (!stage || !stages[stage]) {if(id || [...labels].some(n=>n.startsWith("agent:"))) unclassified++;continue;}
     const target=stages[stage];target.total++;target.issues.push(issue.number);
     target.items.push({number:issue.number,title:String(issue.title ?? "").slice(0,160),state:issue.state,url:safeIssueUrl(issue.url,issue.number),labels:[...labels].filter(n=>["agent:blocked","agent:paused","agent:in-progress"].includes(n)),merged:issue.state === "CLOSED" && merged.has(issue.number)});
-    if(issue.state === "CLOSED") {if(merged.has(issue.number))target.merged++;else target.unknown++;}
+    if(merged.has(issue.number))target.merged++;else if(issue.state === "CLOSED") target.unknown++;
     else if(labels.has("agent:paused") || labels.has("agent:blocked"))target.paused++;
     else if(labels.has("agent:in-progress"))target.running++;
   }
