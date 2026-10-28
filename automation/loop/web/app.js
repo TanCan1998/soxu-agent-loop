@@ -1041,12 +1041,40 @@ function renderQueue() {
   if (!queueVisible.length) { queue.append(element("div","当前分类下没有已创建的需求。","empty")); return; }
   for (const item of queueVisible) {
     const row=element("div",undefined,"queue-item");
+    row.setAttribute("data-issue-number", String(item.number));
+    if (item.state === "OPEN") {
+      row.dataset.draggable = "1";
+      const handle = element("span", undefined, "drag-handle");
+      handle.setAttribute("data-drag-handle", "");
+      handle.setAttribute("aria-hidden", "true");
+      row.append(handle);
+    }
     const title=element(item.url ? "a" : "span",`#${item.number} ${item.title}`,"pr-link");
     if (item.url && /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/.test(item.url)) {title.href=item.url;title.target="_blank";title.rel="noopener noreferrer";}
     const checkpoint=item.checkpoint;
     const live=(data.taskPhases || []).find(t=>t.taskId===item.number);
     const state=item.state === "CLOSED" ? (item.merged ? "已关闭 · PR 已合并" : "已关闭 · 合并状态待核实") : live?.status === "running" ? "执行中 · "+live.phase : checkpoint?.status === "paused" ? "已暂停 · "+(checkpoint.phase ?? "") : checkpoint?.status === "blocked" ? "已阻塞 · "+(checkpoint.phase ?? "") : "等待执行";
-    row.append(title,element("span",state,"queue-state"));queue.append(row);
+    row.append(title,element("span",state,"queue-state"));
+    // 已创建需求也能直接切换 ready（打标签前服务端会做依赖校验）
+    if (item.state === "OPEN") {
+      const isReady = (item.labels || []).includes("agent:ready");
+      const box = element("input"); box.type = "checkbox"; box.checked = isReady;
+      box.addEventListener("change", async () => {
+        try {
+          const result = await api("/api/queue-ready", { method: "POST", body: { number: item.number, ready: box.checked } });
+          if (result?.ok) notice(box.checked ? `#${item.number} 已标为可执行。` : `#${item.number} 已取消可执行。`);
+          else notice(`#${item.number} 不能标为可执行：` + (result?.missing?.length ? "依赖缺失 " + result.missing.join("、") : (result?.reason ?? "未知原因")));
+          await refresh();
+        } catch (error) {
+          box.checked = !box.checked;
+          notice("更新可执行状态失败：" + error.message);
+        }
+      });
+      const tag = element("label", undefined, "queue-ready-toggle");
+      tag.append(box, document.createTextNode(" 就绪"));
+      row.append(tag);
+    }
+    queue.append(row);
   }
 }
 function renderDrafts(data, legacy = null) {
@@ -1342,6 +1370,73 @@ $("reassessIntake").addEventListener("click",async()=>{
 });
 $("submitIntake").addEventListener("click",async()=>{if(!await askConfirm("确认提交该需求？"))return;if(!await saveDraftAnswers())return;await draftAction("batch",{ids:[editingDraft]});});
 $("batchDrafts").addEventListener("click",async()=>{const ids=[...selectedDrafts];if(!ids.length)return notice("请先选择已完成确认的草稿。");if(!await askConfirm(`确认按队列顺序提交 ${ids.length} 项需求？提交前会自动校验前置依赖。`))return;const result=await draftAction("batch",{ids});if(result){selectedDrafts.clear();lastDraftKey="";renderDrafts(result);const blocked=(result.items||[]).filter(x=>ids.includes(x.id)&&x.status==="blocked");if(blocked.length)notice("有 "+blocked.length+" 项依赖校验未通过，已标为阻塞并在列表中标出缺失项。");}});
+
+/**
+ * 已创建需求的拖动排序：拖动时直接重排 DOM，松手后把当前顺序整体提交。
+ * 与草稿排序共用同一套 Pointer 事件写法（移动端可用）。
+ */
+(() => {
+  const list = $("queueList");
+  let drag = null;
+  const rowAt = y => {
+    for (const r of list.querySelectorAll?.("[data-issue-number]") ?? []) {
+      const rect = r.getBoundingClientRect?.();
+      if (!rect || !rect.height) continue;
+      if (y >= rect.top && y <= rect.bottom) return r;
+    }
+    return null;
+  };
+  const onMove = event => {
+    if (!drag || (event.pointerId != null && drag.pointerId != null && event.pointerId !== drag.pointerId)) return;
+    if (!drag.active) {
+      if (Math.abs(event.clientY - drag.startY) < 6) return;
+      drag.active = true;
+      drag.row.classList.add("dragging");
+      document.body?.classList.add("dragging-draft");
+    }
+    event.preventDefault?.();
+    const over = rowAt(event.clientY);
+    if (over && over !== drag.row) {
+      // 直接在 DOM 里挪动，拖动过程就能看到新顺序
+      const rect = over.getBoundingClientRect?.();
+      const after = rect && event.clientY > rect.top + rect.height / 2;
+      over.parentNode?.insertBefore?.(drag.row, after ? over.nextSibling : over);
+    }
+    for (const r of list.querySelectorAll?.("[data-issue-number]") ?? []) {
+      if (r === drag.row) r.classList.add("drop-target"); else r.classList.remove("drop-target");
+    }
+  };
+  const onUp = async () => {
+    if (!drag) return;
+    const active = drag.active;
+    drag.row.classList.remove("dragging", "drop-target");
+    drag = null;
+    document.body?.classList.remove("dragging-draft");
+    window.removeEventListener("pointermove", onMove);
+    window.removeEventListener("pointerup", onUp);
+    window.removeEventListener("pointercancel", onUp);
+    if (!active) return;
+    const order = [...(list.querySelectorAll?.("[data-issue-number]") ?? [])]
+      .map(r => Number(r.getAttribute("data-issue-number")))
+      .filter(n => Number.isSafeInteger(n) && n > 0);
+    try {
+      await api("/api/queue-reorder", { method: "POST", body: { order } });
+      lastQueueKey = "";
+      notice("需求顺序已保存，agent 会按此顺序认领。");
+      await refresh();
+    } catch (error) { notice("保存顺序失败：" + error.message); }
+  };
+  list.addEventListener("pointerdown", event => {
+    const handle = event.target?.closest?.("[data-drag-handle]");
+    const row = handle?.closest?.("[data-issue-number]");
+    if (!row || row.dataset.draggable !== "1") return;
+    event.preventDefault?.();
+    drag = { row, pointerId: event.pointerId ?? null, startY: event.clientY, active: false };
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  });
+})();
 
 /**
  * 拖动排序：按住行首的 ⠿ 手柄拖动。

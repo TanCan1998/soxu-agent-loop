@@ -1,6 +1,7 @@
 import { run } from "./process.mjs";
 import { loadTaskCatalog, taskIdFromIssueTitle } from "./task-catalog.mjs";
 import { mergedIssueNumbers } from "./github-queue.mjs";
+import { readQueueOrder, sortByQueueOrder } from "./queue-order.mjs";
 
 // Remote data is advisory; scheduling remains governed by github-queue.mjs.
 function safePrUrl(value, number) {
@@ -9,7 +10,7 @@ function safePrUrl(value, number) {
 function safeIssueUrl(value, number) {
   try { const url=new URL(value); return url.protocol === "https:" && url.hostname === "github.com" && new RegExp(`^/[^/]+/[^/]+/issues/${number}$`).test(url.pathname) && !url.search && !url.hash ? url.href : null; } catch {return null;}
 }
-export function buildGithubStatus(catalog, issues, prs, base = "main") {
+export function buildGithubStatus(catalog, issues, prs, base = "main", queueOrder = []) {
   const byTask = new Map();
   for (const issue of issues) {
     const id = taskIdFromIssueTitle(issue.title);
@@ -73,7 +74,7 @@ export function buildGithubStatus(catalog, issues, prs, base = "main") {
     else if(labels.has("agent:in-progress"))target.running++;
   }
   tasks.__roadmap={stages:Object.values(stages),unclassified,limited:issues.length>=1000 || prs.length>=1000};
-  tasks.__queue = issues.map(i => ({number:i.number,title:String(i.title ?? "").slice(0,160), state:i.state, merged:merged.has(i.number),
+  tasks.__queue = sortByQueueOrder(issues, queueOrder).map(i => ({number:i.number,title:String(i.title ?? "").slice(0,160), state:i.state, merged:merged.has(i.number),
       labels:(i.labels ?? []).map(l=>l.name).filter(n=>["agent:ready","agent:blocked","agent:waiting","agent:in-progress","agent:paused","agent:pr"].includes(n)),
       url: safeIssueUrl(i.url,i.number)}));
   return tasks;
@@ -85,7 +86,9 @@ export async function readGithubStatus(root, execute = run, base = "main") {
     execute("gh", ["issue", "list", "--state", "all", "--limit", "1000", "--json", "number,title,state,labels,url,milestone"], {cwd:root, timeoutMs:15000}),
     execute("gh", ["pr", "list", "--state", "all", "--limit", "1000", "--json", "number,title,url,state,body,baseRefName,mergedAt,statusCheckRollup"], {cwd:root, timeoutMs:15000}),
   ]);
-  const snapshot = buildGithubStatus(catalog, JSON.parse(issues.stdout), JSON.parse(prs.stdout), base);
+  // 用户自定义顺序（看板拖动）同时影响展示顺序与 agent 认领顺序。
+  const queueOrder = await readQueueOrder(root);
+  const snapshot = buildGithubStatus(catalog, JSON.parse(issues.stdout), JSON.parse(prs.stdout), base, queueOrder);
   await enrichActiveChecks(snapshot, root, execute);
   return snapshot;
 }

@@ -17,7 +17,7 @@ export function mergedIssueNumbers(prs, base = "main") {
   return found;
 }
 
-export function planGithubQueue(issues, catalog, mergedNumbers = new Set()) {
+export function planGithubQueue(issues, catalog, mergedNumbers = new Set(), order = []) {
   const mapped = new Map();
   for (const issue of issues) {
     const id = taskIdFromIssueTitle(issue.title);
@@ -47,7 +47,14 @@ export function planGithubQueue(issues, catalog, mergedNumbers = new Set()) {
     output.push({...issue, taskId: id, priority: id ? priorities.get(id) : 'P1', promote: labels.has('agent:waiting')});
   }
   const rank = {P0:0,P1:1,P2:2};
-  return output.sort((a,b) => rank[a.priority] - rank[b.priority] || a.number - b.number);
+  // 用户自定义顺序优先（看板上拖动排序），未列出的按原规则排在后面。
+  const custom = new Map(order.map((n, i) => [n, i]));
+  const fallback = order.length + output.length + 1;
+  return output.sort((a, b) => {
+    const ca = custom.get(a.number), cb = custom.get(b.number);
+    if (ca !== undefined || cb !== undefined) return (ca ?? fallback) - (cb ?? fallback);
+    return rank[a.priority] - rank[b.priority] || a.number - b.number;
+  });
 }
 
 /** Downgrade legacy ready labels when their dependencies are not yet merged. */
