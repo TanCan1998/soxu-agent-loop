@@ -20,6 +20,8 @@
     "agent:cleanup": "node automation/loop/src/cli.mjs cleanup",
     "agent:seed-issues": "node automation/loop/src/cli.mjs seed-issues",
     "dashboard": "node automation/loop/src/dashboard-cli.mjs",
-    "migrate": "node automation/loop/src/migrate-data.mjs"
+    "migrate": "node automation/loop/src/migrate-data.mjs",
+    "check:commits": "node scripts/check-commit-msg.mjs --range origin/main..HEAD",
+    "check:leaks": "node scripts/check-leaks.mjs"
   }
 }
