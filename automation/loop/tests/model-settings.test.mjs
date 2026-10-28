@@ -44,6 +44,22 @@ test("resumed task reuses its saved selection even after settings change",async(
 });
 
 
+test("a manual stop lets the next start adopt the current model settings", async () => {
+  const { releasePinnedModelsAfterManualStop } = await import("../src/worker.mjs");
+  const pinned = { developer: { ...b, thinking: null }, reviewer: { ...c, thinking: null } };
+  const manual = { reason: "interrupted", modelAssignments: { ...pinned } };
+  assert.equal(releasePinnedModelsAfterManualStop(manual), true);
+  assert.equal(manual.modelAssignments, undefined);
+  // Failure pauses keep their models so retries and cost stay predictable.
+  for (const reason of ["quota", "network", "timeout"]) {
+    const failed = { reason, modelAssignments: { ...pinned } };
+    assert.equal(releasePinnedModelsAfterManualStop(failed), false);
+    assert.deepEqual(failed.modelAssignments, pinned);
+  }
+  assert.equal(releasePinnedModelsAfterManualStop({ reason: "interrupted" }), false);
+  assert.equal(releasePinnedModelsAfterManualStop(null), false);
+});
+
 test("Unicode providers and Windows model paths remain selectable without shell injection", async()=>{
   const rows="provider model context max-out thinking images\nDoCode-🇨🇳22✖️ deepseek-v4-pro 1M 262K yes no\nDoCode×9 model 1M 2K yes no\nllama F:\\AI\\Models\\blobs\\sha256-123 1M 2K no no\n";
   const models=parsePiModelList(rows);

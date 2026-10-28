@@ -818,8 +818,8 @@ $("modelInherit").addEventListener("change",()=>{const scope=$("modelScope").val
 $("saveModels").addEventListener("click",async()=>{
   if (!modelDraft) return;
   if (Object.values(modelDraft.roles).some(x=>Array.isArray(x) && x.length===0)) {$("modelMessage").textContent="角色自定义配置至少选一个模型，或选择继承。";return;}
-  if (!confirm("保存后新任务将使用所选模型，可能改变模型费用。已有任务继续使用固定模型。确定？"))return;
-  try {const result=await api("/api/model-settings",{method:"POST",body:modelDraft});modelSettings=result.settings;$("modelDialog").close();notice("模型配置已保存，仅影响新任务。");await refresh();}
+  if (!confirm("保存后立即对接下来启动的任务生效（可能改变模型费用）。正在运行的任务保持原模型；手动安全停止后再启动会使用新配置。确定？"))return;
+  try {const result=await api("/api/model-settings",{method:"POST",body:modelDraft});modelSettings=result.settings;$("modelDialog").close();notice("模型配置已保存：正在运行的任务不受影响，下次启动（含安全停止后重启）使用新配置。");await refresh();}
   catch(error){$("modelMessage").textContent="保存失败："+error.message;}
 });
 
