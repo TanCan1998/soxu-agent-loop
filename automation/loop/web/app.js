@@ -150,14 +150,46 @@ function renderLogs(force = false) {
   $("logCount").textContent = rows.length + " / " + logs.length + " 条";
   if (followLogs && wasAtBottom) container.scrollTop = container.scrollHeight;
 }
+/* ---------- 列表状态筛选：全部 | 进行中 | 已完成 ---------- */
+const listFilters = { tasks: "all", drafts: "all", milestone: "all" };
+const FILTER_LABELS = [["all", "全部"], ["active", "进行中"], ["done", "已完成"]];
+let lastSnapshot = null;
+const taskDone = task => task.status === "done";
+const draftDone = draft => draft.status === "submitted";
+function passesFilter(filter, done) {
+  return filter === "all" ? true : filter === "done" ? done : !done;
+}
+function renderFilterBar(hostId, key, onPick, counts) {
+  const host = $(hostId);
+  if (!host) return;
+  host.replaceChildren();
+  for (const [value, label] of FILTER_LABELS) {
+    const button = element("button", label + (counts ? " · " + counts[value] : ""), "filter");
+    button.type = "button";
+    button.dataset.filter = value;
+    button.setAttribute("aria-pressed", String(listFilters[key] === value));
+    button.addEventListener("click", () => {
+      if (listFilters[key] === value) return;
+      listFilters[key] = value;
+      onPick();
+    });
+    host.append(button);
+  }
+}
 function renderTasks(data) {
   const tasks = data.tasks || [];
-  const key = JSON.stringify([tasks, data.busy, data.github]);
+  const key = JSON.stringify([tasks, data.busy, data.github, listFilters.tasks]);
   if (lastTaskKey === key) return;
   lastTaskKey = key;
   const node = $("tasks");
   node.replaceChildren();
-  for (const task of [...tasks].sort((a, b) => a.id - b.id)) {
+  renderFilterBar("taskFilters", "tasks", () => { lastTaskKey = ""; renderTasks(lastSnapshot ?? data); }, {
+    all: tasks.length,
+    active: tasks.filter(t => !taskDone(t)).length,
+    done: tasks.filter(taskDone).length,
+  });
+  const visible = [...tasks].sort((a, b) => a.id - b.id).filter(task => passesFilter(listFilters.tasks, taskDone(task)));
+  for (const task of visible) {
     const card = element("article", undefined, "task");
     const live=Boolean(data.runner) && (data.taskPhases ?? []).some(p=>p.taskId === (data.github?.tasks?.["TASK-"+String(task.id).padStart(3,"0")]?.issue ?? task.id) && p.status === "running");
     const merged=data.github?.tasks?.["TASK-"+String(task.id).padStart(3,"0")]?.pr?.state === "merged";
@@ -203,7 +235,7 @@ function renderTasks(data) {
     if (details.length) card.append(element("div", details.join(" · "), "task-detail"));
     node.append(card);
   }
-  if (!tasks.length) node.append(element("div", "暂无任务", "empty"));
+  if (!visible.length) node.append(element("div", tasks.length ? "该状态下暂无任务" : "暂无任务", "empty"));
 }
 function renderAgents() {
   const entries = [...agents.values()].sort((a,b) => a.taskId - b.taskId || a.role.localeCompare(b.role));
@@ -247,7 +279,16 @@ function showMilestoneDetail(id, name, stage, limited, source) {
   if (limited) list.append(element("p","GitHub 查询达到上限，以下明细可能不完整。","hint"));
   if (!stage || !Array.isArray(stage.items)) list.append(element("p","暂无里程碑明细：GitHub 与本地检查点都没有可归类任务。","hint"));
   else if (!stage.items.length) list.append(element("p","该里程碑暂无已归类任务。","hint"));
-  else for (const item of stage.items) {
+  else {
+    const rows = stage.items;
+    renderFilterBar("milestoneFilters", "milestone", () => showMilestoneDetail(id, name, stage, limited, source), {
+      all: rows.length,
+      active: rows.filter(row => !row.merged).length,
+      done: rows.filter(row => row.merged).length,
+    });
+    const shown = rows.filter(row => passesFilter(listFilters.milestone, Boolean(row.merged)));
+    if (!shown.length) list.append(element("p", "该状态下暂无任务。", "hint"));
+    for (const item of shown) {
     const row=element("div",undefined,"milestone-detail-row");
     const label=element(item.url ? "a" : "span", "#"+item.number+" "+item.title);
     if(item.url) { label.href=item.url; label.target="_blank"; label.rel="noopener noreferrer"; }
@@ -262,8 +303,27 @@ function showMilestoneDetail(id, name, stage, limited, source) {
     chip.dataset.state=state.key;
     if(item.localStatus) chip.setAttribute("title","本地状态："+item.localStatus+"（未查询 GitHub）");
     row.append(label,chip); list.append(row);
+    }
   }
   $("milestoneDialog").showModal();
+}
+/** 里程碑区域的活跃/即将进行任务：定宽标签 + 悬浮全称。 */
+function renderPhaseTasks(data) {
+  const host = $("projectPhaseTasks");
+  if (!host) return;
+  host.replaceChildren();
+  const tasks = data?.tasks ?? [];
+  const active = tasks.filter(task => ["running", "paused", "blocked"].includes(task.status));
+  const upcoming = tasks.filter(task => task.status === "pending");
+  const list = active.length ? active : upcoming;
+  host.append(element("span", active.length ? "活跃任务：" : "即将进行的任务：", "phase-tasks-label"));
+  if (!list.length) { host.append(element("span", "无", "subtle")); return; }
+  for (const task of list.slice(0, 8)) {
+    const chip = element("span", task.title, "phase-task-chip");
+    chip.title = "#" + task.id + " " + task.title;
+    host.append(chip);
+  }
+  if (list.length > 8) host.append(element("span", "+" + (list.length - 8) + " 项", "subtle"));
 }
 function renderProjectPhase(github, data) {
   const names={M0:"工程治理",M1:"产品原型",M2:"多 Agent",M3:"开发工具",M4:"交付发布"};
@@ -299,6 +359,7 @@ function renderProjectPhase(github, data) {
   const local = roadmap?.source === "local";
   $("projectPhaseTitle").textContent=!roadmap ? "项目里程碑状态待核实" : running ? `${running} 个里程碑正在推进` : paused ? `${paused} 个里程碑有暂停或阻塞任务` : "已归类里程碑当前无活跃任务";
   $("projectPhaseCount").textContent=roadmap && !roadmap.limited ? `${merged} / ${total} 项已合入${local ? "（本地推定）" : ""}` : "—";
+  renderPhaseTasks(data);
   $("projectPhaseDetail").textContent=!roadmap ? "GitHub 与本地检查点都没有可用的里程碑数据。" : roadmap.limited ? "GitHub 查询达到上限，进度待核实。" : local ? `GitHub 暂不可用，以上按本地检查点与任务文件推定；未归类 ${roadmap.unclassified} 项。合入与验收仍需在 GitHub 复核。` : `按任务元数据或 GitHub 里程碑自动归类；未归类 ${roadmap.unclassified} 项。运行状态基于控制台活动，数据可能有延迟。`;
 }
 
@@ -616,13 +677,15 @@ function draftRow(d) {
 function renderDrafts(data, legacy = null) {
   draftState=data ?? {items:[],busy:false};
   const items=draftState.items || []; const list=$("draftList");
-  const key=JSON.stringify(draftState)+JSON.stringify([...selectedDrafts])+JSON.stringify(legacy);
+  const key=JSON.stringify(draftState)+JSON.stringify([...selectedDrafts])+JSON.stringify(legacy)+listFilters.drafts;
   if(key!==lastDraftKey){lastDraftKey=key;list.replaceChildren();
     if(legacy?.status === "unknown"){const row=element("div",undefined,"queue-item");row.append(element("span","旧版提交结果待核实：请先检查 GitHub。"));const b=element("button","已核实，解除旧锁定");b.addEventListener("click",async()=>{if(confirm("确认已检查 GitHub 中是否创建该需求？")){try{await api("/api/intake-clear",{method:"POST",body:{id:legacy.id}});await refresh();}catch(e){notice("解除锁定失败："+e.message);}}});row.append(b);list.append(row);}
-    for(const d of items.filter(x=>x.status!=="submitted")) list.append(draftRow(d));
+    const activeItems=items.filter(x=>!draftDone(x));
+    const completed=items.filter(draftDone);
+    renderFilterBar("draftFilters","drafts",()=>{lastDraftKey="";renderDrafts(draftState,legacy);},{all:items.length,active:activeItems.length,done:completed.length});
+    if(listFilters.drafts!=="done") for(const d of activeItems) list.append(draftRow(d));
     // Finished requirements live in a collapsed section so the active queue stays short.
-    const completed=items.filter(x=>x.status==="submitted");
-    if(completed.length){const box=element("details",undefined,"queue-completed");box.append(element("summary","已完成需求 · "+completed.length+" 项"));const inner=element("div",undefined,"queue-list");for(const d of completed) inner.append(draftRow(d));box.append(inner);list.append(box);}
+    if(completed.length && listFilters.drafts!=="active"){const box=element("details",undefined,"queue-completed");box.append(element("summary","已完成需求 · "+completed.length+" 项"));const inner=element("div",undefined,"queue-list");for(const d of completed) inner.append(draftRow(d));box.append(inner);list.append(box);}
   }
   const current=items.find(x=>x.id===editingDraft) || null;
   currentIntake=current || items.find(x=>x.status==="assessing") || legacy;updateRunTimers();
