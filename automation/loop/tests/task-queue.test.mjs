@@ -47,12 +47,13 @@ test('real catalog keeps every finished task archived and schedules nothing', as
   const catalog = await loadTaskCatalog();
   validateTaskCatalog(catalog); // archived tasks still satisfy dependencies
   const plan = planTaskQueue(catalog, new Set());
-  // Every TASK-001..006 is merged and archived in tasks/done, so the queue is empty.
-  assert.deepEqual(plan.ready.map(t => t.id), []);
+  // TASK-001..006 are merged/archived; the newest backlog entries are schedulable.
+  assert.deepEqual(plan.ready.map(t => t.id), ['TASK-007', 'TASK-008']);
   assert.deepEqual(plan.waiting.map(t => t.id), []);
   assert.deepEqual([...catalog].map(t => t.id).sort(),
-    ['TASK-001','TASK-002','TASK-003','TASK-004','TASK-005','TASK-006']);
-  assert.ok(catalog.every(t => t.archived), 'all real tasks must be archived after completion');
+    ['TASK-001','TASK-002','TASK-003','TASK-004','TASK-005','TASK-006','TASK-007','TASK-008']);
+  assert.ok(catalog.filter(t => !['TASK-007','TASK-008'].includes(t.id)).every(t => t.archived),
+    'finished tasks stay archived');
 });
 
 test('frontmatter rejects duplicate dependencies, unknown refs, cycles and inconsistent ids', () => {

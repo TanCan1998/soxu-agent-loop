@@ -340,6 +340,11 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
         await commentIssue(issue.number, `SOXU ${paused ? "paused (recoverable)" : "blocked"} at phase ${state?.phase ?? "startup"}; worktree kept. Reason: ${failure.kind}.\n\n${safeFailureMessage(failure)}\n\nManual recovery: ${paused ? "pnpm agent:resume" : "pnpm agent:resume -- --blocked"}`);
       } catch (e) { console.error(`Unable to update Issue (local checkpoint is authoritative for recovery): ${safeFailureMessage(e)}`); }
     }
+    if (!paused) {
+      // 记录自动重试次数：超过 policy.maxBlockedRecoveries 后不再自动抢占队列。
+      state.blockedRecoveryCount = (Number.isInteger(state.blockedRecoveryCount) ? state.blockedRecoveryCount : 0) + 1;
+      try { await writeCheckpoint(state); } catch { /* checkpoint is advisory here */ }
+    }
     return { status: paused ? "paused" : "blocked", issue: issue.number, reason: failure.kind };
   } finally { await unlock(); }
 }
