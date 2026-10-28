@@ -151,7 +151,8 @@ async function recover(selected = null) {
   if (dryRun) { for (const s of tasks) console.log(`would recover #${s.issue.number} at ${s.phase} (${s.status}: ${s.reason ?? "interrupted"})`); return; }
   // Safely preserve dirty edits and let Developer reconcile any main conflicts.
   // Never request paid Pi calls for unsafe/missing worktrees.
-  const { eligible, blocked } = await prepareWorktreeRecovery(tasks);
+  // 恢复路径也必须按集成分支同步工作树，否则会把任务基点拉到 main。
+  const { eligible, blocked } = await prepareWorktreeRecovery(tasks, { base: await integrationBase() });
   if (blocked.length) process.exitCode = 1;
   // Manual resume is intentionally one finite batch, not an endless retry loop.
   for (let i = 0; i < eligible.length; i += p.maxConcurrentAgents) {
