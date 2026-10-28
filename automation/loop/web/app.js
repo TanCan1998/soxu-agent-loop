@@ -88,7 +88,6 @@ function element(tag, value, className) {
 function disableControls() {
   for (const button of document.querySelectorAll("[data-command]")) button.disabled = true;
   $("stop").disabled = true;
-  $("autoMerge").disabled = true;
   $("updateTool").disabled = true;
 }
 function lostAuthorization(token) {
@@ -422,10 +421,6 @@ function render(data) {
   // Hot update stays available while a runner is busy: that is the point of it.
   $("updateTool").disabled = false;
   $("stop").disabled = !data.runner || data.runner.stopping;
-  $("autoMerge").disabled = Boolean(data.busy);
-  $("autoMerge").dataset.enabled = data.autoMergeEnabled ? "true" : "false";
-  $("autoMerge").setAttribute("aria-checked", data.autoMergeEnabled ? "true" : "false");
-  $("autoMerge").textContent = "自动合并：" + (data.autoMergeEnabled ? "开启" : "关闭");
   if (data.update) lastUpdate = data.update;
   $("updateStatus").textContent = updateText(lastUpdate, data.protocolVersion);
   applyUpdateBadge(lastUpdate);
@@ -1007,12 +1002,6 @@ tokenInput.addEventListener("input", () => {
 });
 for (const button of document.querySelectorAll("[data-command]"))
   button.addEventListener("click", () => void execute(button.dataset.command));
-$("autoMerge").addEventListener("click", async () => {
-  const enabled = $("autoMerge").dataset.enabled !== "true";
-  if (enabled && !await askConfirm("开启后，本次控制台后续启动的任务会在仓库分支保护允许时请求自动合并。关闭或重启控制台不会撤销已提交给 GitHub 的自动合并请求。继续？")) return;
-  try { await api("/api/auto-merge", {method:"POST", body:{enabled}}); await refresh(); }
-  catch (error) { notice("设置失败：" + error.message); }
-});
 $("stop").addEventListener("click", async () => {
   if (!await askConfirm("请求优雅停止当前调度；工作树和检查点将保留。确定吗？")) return;
   try {
