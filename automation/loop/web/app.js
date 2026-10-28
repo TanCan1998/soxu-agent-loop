@@ -132,14 +132,15 @@ function closeDialog(dialog) {
   // 没有 Web Animations（旧浏览器/测试环境）时直接关闭，保证状态正确。
   if (reduce || typeof dialog.animate !== "function") return done();
   try {
+    // 书卷式收合：向中线卷起（与进场 dialog-unroll 相反），clip-path 不缩放内容。
     animation = dialog.animate(
-      [{ opacity: 1, transform: "translateY(0) scale(1)", filter: "blur(0)" },
-       { opacity: 0, transform: "translateY(8px) scale(.98)", filter: "blur(6px)" }],
-      { duration: 200, easing: "cubic-bezier(.4,0,.6,1)", fill: "forwards" },
+      [{ opacity: 1, clipPath: "inset(0 0 0 0 round 18px)", filter: "blur(0)" },
+       { opacity: 0, clipPath: "inset(50% 0 50% 0 round 18px)", filter: "blur(6px)" }],
+      { duration: 240, easing: "cubic-bezier(.4,0,.6,1)", fill: "forwards" },
     );
     // finished 在 top-layer 元素被移除或动画被打断时可能永不 resolve，用超时兜底。
     animation?.finished?.then(done, done);
-    setTimeout(done, 260);
+    setTimeout(done, 300);
   } catch { done(); }
 }
 /** 统一打开入口：先清掉上一次退场残留，避免 showModal 抛 InvalidStateError。 */

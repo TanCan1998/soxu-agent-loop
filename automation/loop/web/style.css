@@ -88,12 +88,17 @@ dialog{width:min(680px,calc(100vw - 30px));max-height:85vh;overflow:auto;border:
    弹窗会掉到文档底部。这里直接写死居中，跨环境一致。 */
 dialog[open]{position:fixed;inset:0;margin:auto;height:fit-content;z-index:2147483000}
 /* 弹窗：上下展开 + 淡入；关闭时立即收起（原生 dialog 关闭无法动画，故只做进场） */
-dialog[open]{animation:dialog-in .34s cubic-bezier(.2,.85,.3,1)}
+dialog[open]{animation:dialog-unroll .38s cubic-bezier(.22,.85,.3,1)}
 /* 不用 backdrop-filter：部分 WebView/旧内核会把背板提升为独立合成层，
    导致页面内容盖到弹窗之上。改用更深的纯色背板。 */
 dialog[open]::backdrop{animation:backdrop-fade .34s ease-out;background:#000000a6}
-/* 等比缩放 + 轻微上移 + 去模糊：比 scaleY 变形柔和，不会显得廉价。 */
-@keyframes dialog-in{from{opacity:0;transform:translateY(12px) scale(.97);filter:blur(8px)}to{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}}
+/* 书卷式展开：从中线向上下同时铺开（clip-path inset），配合轻微去模糊。
+   clip-path 不缩放内容，比 scale/scaleY 更像卷轴展开而非缩放。 */
+@keyframes dialog-unroll{
+  from{opacity:0;clip-path:inset(50% 0 50% 0 round 18px);filter:blur(6px)}
+  35%{opacity:1}
+  to{opacity:1;clip-path:inset(0 0 0 0 round 18px);filter:blur(0)}
+}
 @keyframes backdrop-fade{from{opacity:0}to{opacity:1}}
 /* 按钮反馈：按下轻微下压 + 焦点环 */
 button{transition:transform .12s ease,box-shadow .12s ease,background-color .12s ease,border-color .12s ease}
