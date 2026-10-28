@@ -28,7 +28,8 @@ import {
 } from "./runner-state.mjs";
 import { checkUpdate, applyUpdate as applyToolUpdate } from "./update.mjs";
 import { publishStatus, publish as publishVersion } from "./publish.mjs";
-import { readQueueOrder, writeQueueOrder, setIssueReady } from "./queue-order.mjs";
+import { writeQueueOrder, setIssueReady } from "./queue-order.mjs";
+import { run } from "./process.mjs";
 import { loadTaskCatalog } from "./task-catalog.mjs";
 import { buildLocalRoadmap } from "./roadmap-local.mjs";
 
