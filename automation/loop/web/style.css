@@ -322,3 +322,28 @@ body.dragging-draft .queue-item{cursor:grabbing}
   .top{height:auto;flex-wrap:wrap;padding:10px 0}
   .page-nav{order:3;width:100%;justify-content:flex-start;overflow-x:auto}
 }
+
+/* 就绪开关选中态（用 class，兼容不支持 :has() 的安卓 WebView） */
+.queue-ready-toggle.on{border-color:color-mix(in srgb,var(--accent,#528fff) 55%,transparent);
+  background:color-mix(in srgb,var(--accent,#528fff) 14%,var(--panel));color:var(--text)}
+.queue-ready-toggle.on input{accent-color:var(--accent,#528fff)}
+
+/* 触摸设备隐藏自绘滚动指示条（手机上没有意义，还挡视线） */
+@media (pointer:coarse){
+  .scroll-thumb{display:none !important}
+  html.overlay-scroll ::-webkit-scrollbar{width:0;height:0}
+}
+
+/* 安卓/窄屏顶栏：品牌与状态一行，导航独立一行横向滚动 */
+@media (max-width:640px){
+  .top{height:auto;min-height:0;padding:10px 14px;gap:8px;flex-wrap:wrap;align-items:center}
+  .brand{gap:8px}
+  .brand strong{font-size:18px}
+  .brand span{display:none}
+  .top .connection{flex:1 1 100%;order:2;justify-content:flex-start;gap:8px;flex-wrap:nowrap;overflow-x:auto}
+  .top .page-nav{order:3;flex:1 1 100%;width:100%;justify-content:flex-start;flex-wrap:nowrap;overflow-x:auto;
+    -webkit-overflow-scrolling:touch;scrollbar-width:none;padding-bottom:2px}
+  .top .page-nav::-webkit-scrollbar{display:none}
+  .top .page-nav button{flex:0 0 auto;padding:5px 10px}
+  .global-run{flex:0 0 auto}
+}

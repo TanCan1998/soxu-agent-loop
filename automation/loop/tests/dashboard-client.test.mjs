@@ -1056,8 +1056,9 @@ test("created requirements expose a drag handle and a ready toggle", async () =>
   const closed = rows.find(r => r.getAttribute("data-issue-number") === "13");
   assert.ok(!closed.children.some(c => c.className === "drag-handle"), "closed rows are not draggable");
 
-  const readyToggles = openRows.map(r => r.children.find(c => c.className === "queue-ready-toggle"));
+  const readyToggles = openRows.map(r => r.children.find(c => String(c.className).startsWith("queue-ready-toggle")));
   assert.ok(readyToggles.every(Boolean), "each open row has a ready toggle");
+  assert.match(String(readyToggles[1].className), /\bon\b/, "existing agent:ready renders as on-state");
   assert.equal(readyToggles[1].children[0].checked, true, "existing agent:ready label shows as checked");
 
   // 切换 ready 会调用接口

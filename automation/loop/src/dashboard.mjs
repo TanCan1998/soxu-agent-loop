@@ -418,9 +418,16 @@ export class DashboardCoordinator extends EventEmitter {
   }
   /** 直接给已创建需求打/撤 agent:ready，打之前做依赖校验。 */
   async setQueueReady(number, ready) {
-    const result = await setIssueReady(this.root, number, ready, { execute: run });
-    if (result.ok) { this.refreshGithub(true); await this.githubPending; }
-    return result;
+    try {
+      const result = await setIssueReady(this.root, number, ready, { execute: run });
+      if (result.ok) { this.refreshGithub(true); await this.githubPending; }
+      return result;
+    } catch (error) {
+      // 把真实原因带回前端，比统一的 503 operation-failed 有用得多。
+      const message = String(error?.message ?? error).slice(0, 300);
+      console.error("queue-ready failed: " + message);
+      return { ok: false, number, ready: false, missing: [], reason: "error", message };
+    }
   }
   async start(command) {
     if (!COMMANDS.has(command)) throw Object.assign(new Error("unsupported-command"), { status: 400 });
