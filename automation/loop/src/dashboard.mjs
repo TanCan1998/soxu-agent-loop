@@ -496,7 +496,7 @@ async function readBody(request) {
   catch { throw Object.assign(new Error("invalid-json"), { status: 400 }); }
 }
 
-export function createDashboardServer({ root = ROOT, token, bindHost = "127.0.0.1", coordinator = new DashboardCoordinator({ root }) } = {}) {
+export function createDashboardServer({ root = ROOT, token, bindHost = "127.0.0.1", coordinator = new DashboardCoordinator({ root }), restart = null } = {}) {
   if (!isValidToken(token)) throw new Error("Invalid dashboard token: 8-128 printable characters without spaces");
   const streamClients = new Set();
   let heartbeat = null, catalogPromise = null;
@@ -630,6 +630,12 @@ export function createDashboardServer({ root = ROOT, token, bindHost = "127.0.0.
           // Allowed while a runner is active: loaded modules keep running, only new
           // processes see the updated checkout.
           const result = await coordinator.applyUpdate();
+          if (result.status === "updated" && typeof restart === "function") {
+            // Applying new code only helps the next process: hand the request over and
+            // let the caller restart this dashboard (running tasks are detached).
+            setTimeout(() => { Promise.resolve(restart()).catch(error => console.error("dashboard restart failed: " + (error?.message ?? error))); }, 150);
+            return reply(200, { ...result, restarting: true });
+          }
           return reply(result.status === "updated" || result.status === "up-to-date" ? 200 : 409, result);
         }
         if (request.url === "/api/advisory-delete") {
