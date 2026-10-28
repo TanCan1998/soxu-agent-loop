@@ -247,7 +247,3 @@ html.theme-switching,html.theme-switching *,html.theme-switching *::before,html.
     fill .58s ease,stroke .58s ease,opacity .58s ease !important;
 }
 @media (prefers-reduced-motion:reduce){html.theme-switching,html.theme-switching *,html.theme-switching *::before,html.theme-switching *::after{transition:none !important}}
-/* 主题切换转场：由 JS 用 clip-path 圆形扩散驱动，这里禁掉默认交叉淡化 */
-::view-transition-old(root),::view-transition-new(root){animation:none;mix-blend-mode:normal}
-::view-transition-old(root){z-index:1}
-::view-transition-new(root){z-index:2}

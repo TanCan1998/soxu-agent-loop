@@ -946,3 +946,19 @@ test("closing a dialog clears its transient closing state", async () => {
   assert.equal(dialog.dataset.closing, undefined, "closing marker is removed");
 });
 
+test("opening a dialog cancels any leftover exit animation", async () => {
+  const settings = { schemaVersion: 1, revision: 0, global: [], roles: { developer: null, reviewer: null, product: null, quality: null, intake: null }, favorites: [] };
+  const view = page({ handler: () => ({ ok: true, status: 200, json: async () => ({ ...STATUS, modelInfo: { status: "ok", settings, selected: {} } }) }) });
+  view.elements.token.value = TOKEN;
+  view.elements.connect.dispatch("click");
+  await tick();
+  const dialog = view.elements.modelDialog;
+  let cancelled = 0;
+  // 模拟退场动画残留（fill:forwards 会让元素保持 opacity:0）
+  dialog.getAnimations = () => [{ cancel() { cancelled += 1; } }];
+  dialog.open = false;
+  view.elements.openModels.dispatch("click");
+  await tick();
+  assert.equal(cancelled, 1, "residual exit animation is cancelled before showing the dialog");
+});
+

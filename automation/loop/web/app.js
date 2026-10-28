@@ -117,9 +117,13 @@ function closeDialog(dialog) {
   dialog.dataset.closing = "1";
   dialog.classList.add("closing"); // 让 ::backdrop 一起淡出
   let settled = false;
+  let animation = null;
   const done = () => {
     if (settled) return;
     settled = true;
+    // 必须取消动画：fill:"forwards" 会把元素永久留在 opacity:0，
+    // 再次 showModal 时弹窗虽然 open 却完全透明（表现为"打不开"）。
+    try { animation?.cancel(); } catch { /* already gone */ }
     dialog.classList.remove("closing");
     delete dialog.dataset.closing;
     if (dialog.open) { try { dialog.close(); } catch { /* already closed */ } }
@@ -128,7 +132,7 @@ function closeDialog(dialog) {
   // 没有 Web Animations（旧浏览器/测试环境）时直接关闭，保证状态正确。
   if (reduce || typeof dialog.animate !== "function") return done();
   try {
-    const animation = dialog.animate(
+    animation = dialog.animate(
       [{ opacity: 1, transform: "translateY(0) scale(1)", filter: "blur(0)" },
        { opacity: 0, transform: "translateY(8px) scale(.98)", filter: "blur(6px)" }],
       { duration: 200, easing: "cubic-bezier(.4,0,.6,1)", fill: "forwards" },
@@ -143,6 +147,8 @@ function openDialog(dialog) {
   if (!dialog) return;
   delete dialog.dataset.closing;
   dialog.classList.remove("closing");
+  // 取消残留的退场动画，否则元素会带着 opacity:0 的填充状态显示（看起来像没弹出来）。
+  try { dialog.getAnimations?.().forEach(item => item.cancel()); } catch { /* no WAAPI */ }
   if (!dialog.open) dialog.showModal();
 }
 /**
@@ -859,7 +865,6 @@ function updateRunTimers() {
   }
 }
 let themeSwitchTimer = null;
-const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
 /**
  * 主题切换：优先用 View Transitions 做从主题按钮扩散的圆形转场（平滑且不闪烁），
  * 不支持时退回到全站颜色过渡。首次应用主题不播动画。
@@ -867,29 +872,14 @@ const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion:
 function setTheme(theme) {
   const root = document.documentElement;
   const changed = Boolean(root.dataset.theme) && root.dataset.theme !== theme;
-  const apply = () => { root.dataset.theme = theme; };
-  if (changed && !prefersReducedMotion() && typeof document.startViewTransition === "function") {
-    const button = $("themeToggle");
-    const rect = button?.getBoundingClientRect?.();
-    const x = rect ? rect.left + rect.width / 2 : window.innerWidth / 2;
-    const y = rect ? rect.top + rect.height / 2 : 0;
-    const radius = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
-    const transition = document.startViewTransition(apply);
-    transition.ready.then(() => {
-      document.documentElement.animate(
-        { clipPath: ["circle(0px at " + x + "px " + y + "px)", "circle(" + radius + "px at " + x + "px " + y + "px)"] },
-        { duration: 560, easing: "cubic-bezier(.22,.61,.36,1)", pseudoElement: "::view-transition-new(root)" },
-      );
-    }).catch(() => { /* 转场失败不影响主题本身 */ });
-    themeLabelAndSave(theme);
-    return;
-  }
+  // 只用 CSS 过渡：View Transitions 会对整页做快照，和 top-layer 弹窗、实时数据刷新
+  // 冲突，出现过主题切换不生效、弹窗被快照层遮住的问题。
   if (changed) {
     root.classList?.add("theme-switching");
     clearTimeout(themeSwitchTimer);
-    themeSwitchTimer = setTimeout(() => root.classList?.remove("theme-switching"), 620);
+    themeSwitchTimer = setTimeout(() => root.classList?.remove("theme-switching"), 640);
   }
-  apply();
+  root.dataset.theme = theme;
   themeLabelAndSave(theme);
 }
 function themeLabelAndSave(theme) {
