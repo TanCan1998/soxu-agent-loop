@@ -49,10 +49,10 @@ export async function createPr(n, branch, summary, base = "main") {
     return await gh(["pr", "create", "--base", base, "--head", branch, "--title", `[agent] ${branch}`, "--body-file", p], ROOT);
   } finally { await rm(dir, { recursive: true, force: true }); }
 }
-export async function branchProtectionEnabled() {
+export async function branchProtectionEnabled(branch = "main") {
   // 若 GitHub 禁止读取或仓库未开启保护，拒绝自动合并。
   // GitHub rulesets 还应由仓库所有者在 Settings 中明确检查。
-  const result = await run("gh", ["api", "repos/{owner}/{repo}/branches/main/protection"], { cwd: ROOT, allowFailure: true, timeoutMs: 30000 });
+  const result = await run("gh", ["api", `repos/{owner}/{repo}/branches/${branch}/protection`], { cwd: ROOT, allowFailure: true, timeoutMs: 30000 });
   if (result.code !== 0) return false;
   try {
     const v = JSON.parse(result.stdout);

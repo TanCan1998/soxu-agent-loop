@@ -113,6 +113,22 @@ export function applyReviewRejection(state, summary, maxRetries) {
   return { exhausted: false };
 }
 
+/**
+ * A summary-only approval must not clear earlier findings: when a previous review is on
+ * record, the new verdict has to confirm each item with evidence.
+ */
+export function enforcePriorFindings(parsed, lastReview) {
+  if (!lastReview || !parsed?.approved) return parsed;
+  const findings = Array.isArray(parsed.findings) ? parsed.findings : null;
+  const unresolved = !findings || findings.some(item => item?.status !== "resolved");
+  if (!unresolved) return parsed;
+  return {
+    ...parsed,
+    approved: false,
+    summary: "评审通过但未逐条确认上轮问题（缺少 findings 或存在 unresolved）：" + parsed.summary,
+  };
+}
+
 /** A blocked task that is retried gets a fresh review budget; the outer bound is blockedRecoveryCount. */
 export function beginBlockedRetry(state, oldStatus) {
   if (oldStatus !== "blocked") return false;
@@ -273,7 +289,7 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
           const reviewerActivity = createPiActivityReporter(issue.number, "reviewer");
           let review;
           try { review = await runPi({ cwd: wt.directory, timeouts: { ...policy.timeouts, piHardMinutes: policy.timeouts.reviewHardMinutes }, modelSelection: roleModels.reviewer, onEvent: reviewerActivity.onEvent,
-            prompt: `${reviewRole}\n\n${mainDocs}\n\nReview the staged diff versus HEAD for Issue #${issue.number}: ${issue.title}. Do not edit files.\nUse git diff --cached to read the implementation.\nReturn only the required SOXU_REVIEW_RESULT JSON marker on its own final line.`, signal }); reviewerActivity.finish(true); }
+            prompt: `${reviewRole}\n\n${mainDocs}\n\nReview the staged diff versus HEAD for Issue #${issue.number}: ${issue.title}. Do not edit files.${state.lastReview ? "\n\nPREVIOUS REVIEW FINDINGS (unresolved until proven otherwise; verify each one against the current tree):\n" + state.lastReview + "\nRequirement: your SOXU_REVIEW_RESULT must include a findings array, one entry per item above, each {\"item\": \"...\", \"status\": \"resolved\" or \"unresolved\", \"evidence\": \"...\"}. Approving while any item is missing or unresolved is not allowed." : ""}\nUse git diff --cached to read the implementation.\nReturn only the required SOXU_REVIEW_RESULT JSON marker on its own final line.`, signal }); reviewerActivity.finish(true); }
           catch (error) { reviewerActivity.finish(false); throw error; }
           await inspectChanges(wt.directory, state.base, policy);
           const postReviewTree = await git(["write-tree"], wt.directory);
@@ -281,8 +297,8 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
             console.warn("Working tree changed during review; recheck and review again");
             await checkpoint("checks"); break;
           }
-          const parsed = parseReview(review.text);
-          if (parsed.approved) { state.summary = parsed.summary; state.reviewedTree = postReviewTree; await checkpoint("finalChecks"); break; }
+          const parsed = enforcePriorFindings(parseReview(review.text), state.lastReview);
+          if (parsed.approved) { state.summary = parsed.summary; state.reviewedTree = postReviewTree; delete state.lastReview; await checkpoint("finalChecks"); break; }
           const rejection = applyReviewRejection(state, parsed.summary, policy.maxRetries);
           await writeCheckpoint(state);
           if (rejection.exhausted) throw new Error(`Review rejected after ${state.attempt + 1} attempts: ${parsed.summary}`);
@@ -330,8 +346,21 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
           await commentIssue(issue.number, `Agent produced a reviewed PR: ${state.pr}`);
           await labelIssue(issue.number, "agent:pr", "agent:in-progress");
           if (policy.autoMerge) {
-            if (await branchProtectionEnabled()) await autoMerge(state.pr);
-            else console.warn(`Auto-merge disabled; main required checks not verified: ${state.pr}`);
+            try {
+              if (await branchProtectionEnabled(base)) {
+                await autoMerge(state.pr);
+                console.log(`Auto-merge requested for ${state.pr} (target ${base})`);
+                state.autoMerge = "requested";
+              } else {
+                console.warn(`Auto-merge skipped; ${base} required checks not verified: ${state.pr}`);
+                state.autoMerge = "skipped-protection";
+              }
+            } catch (error) {
+              // Never fail a finished task because auto-merge could not be requested.
+              console.warn(`Auto-merge failed for ${state.pr}: ${safeFailureMessage(error, 300)}`);
+              state.autoMerge = "failed";
+            }
+            await writeCheckpoint(state);
           }
           await checkpoint("done"); break;
         case "done":
