@@ -4,7 +4,7 @@ import {mkdtemp,mkdir,writeFile,rm,access,open} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {run} from "../src/process.mjs";
-import {writeCheckpoint} from "../src/checkpoint.mjs";
+import {writeCheckpoint,readCheckpoint} from "../src/checkpoint.mjs";
 import {cleanupMergedTasks} from "../src/merged-cleanup.mjs";
 
 async function fixture(fn){const tmp=await mkdtemp(join(tmpdir(),"soxu-cleanup-")),root=join(tmp,"repo"),wt=join(tmp,"soxu-worktrees","github-issue-1-example"),remote=join(tmp,"remote.git"),branch="agent/github-issue-1-example";
@@ -20,3 +20,32 @@ test("dirty and ignored user data preserve local worktree and branch",()=>fixtur
 test("unmerged, changed PR head and active lock preserve everything",()=>fixture(async x=>{x.setPr({state:"OPEN",mergedAt:null});assert.equal((await x.clean())[0].status,"not-verified");x.setPr({state:"MERGED",mergedAt:"now",headRefOid:"f".repeat(40)});assert.equal((await x.clean())[0].status,"not-verified");await mkdir(join(x.root,".soxu","locks"),{recursive:true});const h=await open(join(x.root,".soxu","locks","github-issue-1.lock"),"w");await h.close();assert.equal((await x.clean())[0].status,"locked");await access(x.wt);}));
 test("remote ref advanced after merge is not deleted and local copy is preserved",()=>fixture(async x=>{await writeFile(join(x.wt,"change"),"more");await x.git(["add","change"],x.wt);await x.git(["commit","-m","new"],x.wt);await x.git(["push","origin",x.branch],x.wt);const [r]=await x.clean();assert.equal(r.remote,"changed");await access(x.wt);}));
 test("manually removed worktree and refs are recorded as cleaned",()=>fixture(async x=>{await x.git(["worktree","remove",x.wt]);await x.git(["branch","-D",x.branch]);await x.git(["push","origin",`:${x.branch}`]);const [r]=await x.clean();assert.equal(r.status,"cleaned");assert.equal(r.local,"absent");assert.equal(r.remote,"absent");assert.deepEqual(await x.clean(),[]);}));
+
+test("cleanup closes the issue even when the worktree was already cleaned", async () => {
+  const root = await mkdtemp(join(tmpdir(), "soxu-cleanup-close-"));
+  try {
+    const checkpointDir = join(root, ".soxu", "checkpoints");
+    const state = {
+      issue: { number: 74 }, local: false, status: "done", phase: "done",
+      branch: "agent/github-issue-74-m0-task-008", commit: "a".repeat(40),
+      pr: "https://github.com/a/b/pull/76",
+      directory: join(root, "..", "soxu-worktrees", "github-issue-74-m0-task-008"),
+      cleanup: { complete: true, remote: "absent", local: "absent", checkedAt: new Date().toISOString() },
+    };
+    await writeCheckpoint(state, checkpointDir);
+    const calls = [];
+    const execute = async (bin, args) => {
+      calls.push(bin + " " + args.join(" "));
+      if (args[0] === "issue" && args[1] === "view") return { stdout: JSON.stringify({ state: "OPEN" }) };
+      if (args[0] === "issue" && args[1] === "close") return { stdout: "" };
+      throw new Error("unexpected command: " + args.join(" "));
+    };
+    const results = await cleanupMergedTasks(root, { execute, base: "dev", log: () => {} });
+    assert.equal(results.length, 0, "already-cleaned task does no git work");
+    assert.ok(calls.some(c => c.startsWith("gh issue close 74")), "issue must be closed: " + calls.join(" | "));
+    assert.equal((await readCheckpoint(74, checkpointDir, false)).issueClosed, "closed");
+    calls.length = 0;
+    await cleanupMergedTasks(root, { execute, base: "dev", log: () => {} });
+    assert.equal(calls.length, 0, "closed state is cached in the checkpoint");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

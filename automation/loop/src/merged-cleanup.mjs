@@ -6,15 +6,33 @@ import { readCheckpoint, writeCheckpoint } from "./checkpoint.mjs";
 const samePath = (a,b) => process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 
 // Cleanup is restricted to Runner-owned GitHub tasks with an exact merged PR head.
+/** 合入集成分支后关闭 Issue（幂等；结果缓存在检查点里，避免每轮都问 GitHub）。 */
+async function closeMergedIssue(exec, state, n, base) {
+  if (state.issueClosed === "closed") return "cached";
+  try {
+    const seen = JSON.parse((await exec("gh", ["issue", "view", String(n), "--json", "state"])).stdout);
+    if (seen.state !== "OPEN") { state.issueClosed = "already-closed"; return "already-closed"; }
+    await exec("gh", ["issue", "close", String(n), "--comment", `已合入集成分支 ${base}；release 发布到 main 后随版本生效。`]);
+    state.issueClosed = "closed";
+    return "closed";
+  } catch { return "unknown"; }
+}
 export async function cleanupMergedTasks(root, { execute=run, log=console.log, signal, base = "main" }={}) {
   const checkpointDir=join(dataRoot(root),"checkpoints"), lockDir=join(root,".soxu","locks");
   let files;try { files=await readdir(checkpointDir); } catch(e) {if(e.code==="ENOENT")return [];throw e;}
   const ids=[...new Set(files.map(x=>/^(?:github-)?issue-(\d+)\.json$/.exec(x)?.[1]).filter(Boolean))];
   const results=[];let repository;
+  const execAtRoot=(bin,args)=>execute(bin,args,{cwd:root,timeoutMs:45000,signal});
   for(const id of ids) {
     if(signal?.aborted) break;
     const state=await readCheckpoint(Number(id),checkpointDir,false);
-    if(!state || state.local || state.status!=="done" || state.phase!=="done" || state.cleanup?.complete) continue;
+    if(!state || state.local) continue;
+    // 已清理完成的检查点不再做 git 工作，但仍要补齐"关闭 Issue"这一步（之前因此漏关）。
+    if(state.status==="done" && state.phase==="done" && state.cleanup?.complete) {
+      if(await closeMergedIssue(execAtRoot, state, Number(id), base) === "closed") await writeCheckpoint(state, checkpointDir);
+      continue;
+    }
+    if(state.status!=="done" || state.phase!=="done") continue;
     const n=Number(id), branch=state.branch, sha=state.commit;
     const match=typeof branch==="string" && new RegExp(`^agent/(?:github-issue-|issue-)${n}-([a-z0-9-]+)$`).exec(branch);
     const managed=resolve(root,"../soxu-worktrees");
@@ -73,10 +91,9 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
       } else if(ref.code!==1) throw Error("local-ref-unavailable");
       const complete=["absent","deleted"].includes(remoteStatus) && ["absent","deleted"].includes(localStatus);
       fresh.cleanup={complete,remote:remoteStatus,local:localStatus,checkedAt:new Date().toISOString()};await writeCheckpoint(fresh,checkpointDir);
-      const result={issue:n,status:complete?"cleaned":"preserved",remote:remoteStatus,local:localStatus};results.push(result);
-      // main is the default branch, so "Closes #N" never fires for dev merges. Close the
-      // issue here (idempotent) so the issue list and downstream dependencies agree.
-      if(complete){try{const seen=JSON.parse((await exec("gh",["issue","view",String(n),"--json","state"])).stdout);if(seen.state==="OPEN"){await exec("gh",["issue","close",String(n),"--comment",`已合入集成分支 ${base}；release 发布到 main 后随版本生效。`]);result.issueClosed="closed";}else result.issueClosed="already-closed";}catch{result.issueClosed="unknown";}}
+      const result={issue:n,status:complete?"cleaned":"preserved",remote:remoteStatus,local:localStatus};
+      if(complete) result.issueClosed=await closeMergedIssue(exec, fresh, n, base);
+      results.push(result);
       log(`Merged cleanup #${n}: remote=${remoteStatus}, local=${localStatus}`);
     } catch(e) {results.push({issue:n,status:"error"});log(`Merged cleanup #${n} could not be completed; the next run will retry.`);}
     finally {await rm(lock,{force:true});}
