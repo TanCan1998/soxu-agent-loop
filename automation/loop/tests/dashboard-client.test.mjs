@@ -515,7 +515,37 @@ test("milestone detail falls back to local checkpoints when GitHub is unavailabl
   assert.match(rows[0].textContent, /GitHub 暂不可用/);
   assert.equal(rows.length, 3);
   assert.match(rows[1].children[0].textContent, /#1 任务一/);
-  assert.equal(rows[1].children[1].textContent, "已合入");
+  assert.equal(rows[1].children[1].textContent, "✓ 已合入");
+  assert.equal(rows[1].children[1].dataset.state, "merged");
+});
+
+test("milestone detail distinguishes all six task states", async () => {
+  const stages = [{ id:"M2", name:"多 Agent", total:6, merged:1, running:0, paused:0, unknown:0, issues:[1,2,3,4,5,6], items:[
+    { number:1, title:"已合入", state:"CLOSED", labels:[], merged:true, url:null },
+    { number:2, title:"关闭但未核实", state:"CLOSED", labels:[], merged:false, url:null },
+    { number:3, title:"阻塞", state:"OPEN", labels:["agent:blocked"], merged:false, url:null },
+    { number:4, title:"暂停", state:"OPEN", labels:["agent:paused"], merged:false, url:null },
+    { number:5, title:"进行中", state:"OPEN", labels:["agent:in-progress"], merged:false, url:null },
+    { number:6, title:"待处理", state:"OPEN", labels:["agent:ready"], merged:false, url:null },
+  ] }];
+  const snapshot = { ...STATUS, github:{ status:"ok", updatedAt:"2026-10-27T00:00:00Z", tasks:{ __roadmap:{ stages, unclassified:0, limited:false } } } };
+  const app = page({ handler: () => ({ ok:true, status:200, json: async () => snapshot }) });
+  app.elements.token.value = TOKEN;
+  app.elements.connect.dispatch("click");
+  await tick();
+  const card = app.elements.roadmapCards.children.find(node => node.dataset.status !== undefined && /M2/.test(node.getAttribute("aria-label") ?? ""));
+  card.dispatch("click");
+  await tick();
+  const chips = app.elements.milestoneDetails.children
+    .filter(row => row.className === "milestone-detail-row")
+    .map(row => row.children[1]);
+  assert.deepEqual(chips.map(chip => chip.dataset.state), ["merged","unverified","blocked","paused","running","pending"]);
+  assert.deepEqual(chips.map(chip => chip.textContent), ["✓ 已合入","⏳ 已关闭 · 合并待核实","⛔ 已阻塞","⏸ 已暂停","▶ 进行中","○ 待处理"]);
+  // Six distinct colours are declared in the stylesheet for these keys.
+  const css = await readFile(new URL("../web/style.css", import.meta.url), "utf8");
+  for (const state of ["merged","unverified","blocked","paused","running","pending"]) {
+    assert.match(css, new RegExp("\\.milestone-state\\[data-state=" + state + "\\]"), "missing colour rule for " + state);
+  }
 });
 
 test("active intake and advisory report show elapsed state",async()=>{

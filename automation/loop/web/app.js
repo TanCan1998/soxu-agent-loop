@@ -251,8 +251,17 @@ function showMilestoneDetail(id, name, stage, limited, source) {
     const row=element("div",undefined,"milestone-detail-row");
     const label=element(item.url ? "a" : "span", "#"+item.number+" "+item.title);
     if(item.url) { label.href=item.url; label.target="_blank"; label.rel="noopener noreferrer"; }
-    const status=item.merged ? "已合入" : item.state === "CLOSED" ? "已关闭 · 合并待核实" : item.labels.includes("agent:blocked") ? "已阻塞" : item.labels.includes("agent:paused") ? "已暂停" : item.labels.includes("agent:in-progress") ? "进行中" : "待处理";
-    row.append(label,element("span",status,"subtle")); list.append(row);
+    // Six distinct states: colour alone is not enough, so every chip carries an icon.
+    const state = item.merged ? { key:"merged", label:"已合入", icon:"✓" }
+      : item.state === "CLOSED" ? { key:"unverified", label:"已关闭 · 合并待核实", icon:"⏳" }
+      : item.labels.includes("agent:blocked") ? { key:"blocked", label:"已阻塞", icon:"⛔" }
+      : item.labels.includes("agent:paused") ? { key:"paused", label:"已暂停", icon:"⏸" }
+      : item.labels.includes("agent:in-progress") ? { key:"running", label:"进行中", icon:"▶" }
+      : { key:"pending", label:"待处理", icon:"○" };
+    const chip=element("span",state.icon+" "+state.label,"milestone-state");
+    chip.dataset.state=state.key;
+    if(item.localStatus) chip.setAttribute("title","本地状态："+item.localStatus+"（未查询 GitHub）");
+    row.append(label,chip); list.append(row);
   }
   $("milestoneDialog").showModal();
 }
