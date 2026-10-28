@@ -266,3 +266,10 @@ html.theme-switching,html.theme-switching *,html.theme-switching *::before,html.
 html.overlay-scroll{scrollbar-width:none}
 html.overlay-scroll ::-webkit-scrollbar,html.overlay-scroll ::-webkit-scrollbar-thumb{width:0;height:0;display:none}
 html.overlay-scroll .scroll-thumb{z-index:2147483000}
+
+/* 滚动滑块可拖动：本体 6px，命中区扩展到 18px */
+.scroll-thumb{pointer-events:auto;cursor:grab;touch-action:none;position:fixed}
+.scroll-thumb::before{content:"";position:absolute;inset:0 -6px;border-radius:99px}
+.scroll-thumb.dragging{cursor:grabbing}
+.scroll-thumb.dragging,.scroll-thumb:hover{opacity:1;background:color-mix(in srgb,var(--accent,#528fff) 85%,transparent);
+  box-shadow:0 0 10px 1px color-mix(in srgb,var(--accent,#528fff) 60%,transparent),0 0 22px 4px color-mix(in srgb,var(--accent,#528fff) 22%,transparent)}
