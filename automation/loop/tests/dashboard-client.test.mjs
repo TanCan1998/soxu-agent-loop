@@ -46,7 +46,7 @@ function page({ storage = new Map(), handler = () => response(), hidden = false,
   const ids = [
     "milestoneDialog", "milestoneTitle", "milestoneDetails", "closeMilestone", "token", "tokenLabel", "authPanel", "authNotice", "connect", "notice", "connection", "dot", "globalRun", "running", "pending", "done",
     "total", "badge", "runner", "updated", "stop", "tasks", "logs", "refresh", "copyLogs", "intakeRunState", "productReports", "productCopy", "productDelete", "productClear", "qualityReports", "qualityCopy", "qualityDelete", "qualityClear",
-    "navOverview", "navExecution", "navMonitor", "navRequirements", "navLanes", "navModels", "pageOverview", "pageExecution", "pageMonitor", "pageRequirements", "pageLanes", "pageModels", "modelSummary", "openModels", "closeModels", "reloadModels", "saveModels", "modelScope", "modelSearch", "modelInherit", "modelDialog", "modelGroups", "modelMessage", "logLimit", "logFilter", "followLogs", "logCount", "agentCards", "githubStatus", "autoMerge", "updateStatus", "updateTool", "projectPhaseTitle", "projectPhaseDetail", "projectPhaseCount", "roadmapCards", "developmentLane", "productLane", "qualityLane", "lessonsStatus", "openProduct", "openQuality", "productDialog", "qualityDialog", "closeProduct", "closeQuality", "runProduct", "runQuality", "productRunState", "qualityRunState", "productReport", "qualityReport", "projectProgress", "projectProgressFill", "themeToggle", "openIntake", "intakeDialog", "intakeSummary", "queueList", "closeIntake", "requirement", "assessIntake", "intakeResult", "queueReady", "intakeMilestone", "submitIntake", "clearIntake", "draftList", "batchDrafts", "saveDraft", "saveAnswers", "requirementField", "assessingHint", "reassessIntake",
+    "navOverview", "navExecution", "navMonitor", "navRequirements", "navLanes", "navModels", "pageOverview", "pageExecution", "pageMonitor", "pageRequirements", "pageLanes", "pageModels", "modelSummary", "openModels", "closeModels", "reloadModels", "saveModels", "modelScope", "modelSearch", "modelInherit", "modelDialog", "modelGroups", "modelMessage", "logLimit", "logFilter", "followLogs", "logCount", "agentCards", "githubStatus", "autoMerge", "updateStatus", "updateTool", "taskFilters", "draftFilters", "milestoneFilters", "projectPhaseTasks", "projectPhaseTitle", "projectPhaseDetail", "projectPhaseCount", "roadmapCards", "developmentLane", "productLane", "qualityLane", "lessonsStatus", "openProduct", "openQuality", "productDialog", "qualityDialog", "closeProduct", "closeQuality", "runProduct", "runQuality", "productRunState", "qualityRunState", "productReport", "qualityReport", "projectProgress", "projectProgressFill", "themeToggle", "openIntake", "intakeDialog", "intakeSummary", "queueList", "closeIntake", "requirement", "assessIntake", "intakeResult", "queueReady", "intakeMilestone", "submitIntake", "clearIntake", "draftList", "batchDrafts", "saveDraft", "saveAnswers", "requirementField", "assessingHint", "reassessIntake",
   ];
   const elements = Object.fromEntries(ids.map(id => [id, node()]));
   const actions = ["start", "loop", "watch"].map(command => {
@@ -488,6 +488,89 @@ test("answers enable a re-assessment that posts the draft id", async () => {
   await tick();
   const request = app.requests.find(x => x.path === "/api/drafts-reassess");
   assert.deepEqual(JSON.parse(request.options.body), { id });
+});
+
+test("milestone header lists active tasks, or upcoming ones when nothing is active", async () => {
+  const stages = [{ id:"M2", name:"多 Agent", total:2, merged:1, running:0, paused:0, unknown:0, issues:[4,5], items:[] }];
+  const running = { ...STATUS, tasks:[{id:4,title:"实现网络重试策略与超时预算（很长很长的标题）",status:"running"},{id:5,title:"已完成任务",status:"done"}], github:{ status:"ok",updatedAt:null,tasks:{__roadmap:{stages,unclassified:0,limited:false}} } };
+  const app = page({ handler: () => ({ ok:true, status:200, json: async () => running }) });
+  app.elements.token.value = TOKEN;
+  app.elements.connect.dispatch("click");
+  await tick();
+  const label = app.elements.projectPhaseTasks.children[0];
+  assert.equal(label.textContent, "活跃任务：");
+  const chip = app.elements.projectPhaseTasks.children[1];
+  assert.equal(chip.className, "phase-task-chip");
+  assert.equal(chip.textContent, "实现网络重试策略与超时预算（很长很长的标题）");
+  assert.equal(chip.title, "#4 实现网络重试策略与超时预算（很长很长的标题）");
+  assert.equal(app.elements.projectPhaseTasks.children.length, 2, "only active tasks are chipped");
+
+  const idle = { ...running, tasks:[{id:6,title:"待开始任务",status:"pending"}] };
+  const view = page({ handler: () => ({ ok:true, status:200, json: async () => idle }) });
+  view.elements.token.value = TOKEN;
+  view.elements.connect.dispatch("click");
+  await tick();
+  assert.equal(view.elements.projectPhaseTasks.children[0].textContent, "即将进行的任务：");
+  assert.equal(view.elements.projectPhaseTasks.children[1].textContent, "待开始任务");
+});
+
+test("task list filters by 全部 / 进行中 / 已完成", async () => {
+  const snapshot = { ...STATUS, tasks:[{id:1,title:"甲",status:"running"},{id:2,title:"乙",status:"done"},{id:3,title:"丙",status:"blocked"}] };
+  const app = page({ handler: () => ({ ok:true, status:200, json: async () => snapshot }) });
+  app.elements.token.value = TOKEN;
+  app.elements.connect.dispatch("click");
+  await tick();
+  const cards = () => app.elements.tasks.children.filter(node => node.className === "task");
+  assert.equal(cards().length, 3);
+  const pick = value => app.elements.taskFilters.children.find(button => button.dataset.filter === value);
+  assert.equal(pick("all").getAttribute("aria-pressed"), "true");
+  pick("done").dispatch("click");
+  await tick();
+  assert.equal(cards().length, 1);
+  assert.equal(pick("done").getAttribute("aria-pressed"), "true");
+  pick("active").dispatch("click");
+  await tick();
+  assert.equal(cards().length, 2);
+});
+
+test("requirement queue filters completed drafts", async () => {
+  const assessment = { title:"T", feasibility:"可行", plan:"P", dependencies:"无", acceptance:"A", unknowns:"无", questions:[] };
+  const items = [
+    { id:"11111111-1111-4111-8111-111111111111", requirement:"进行中的需求描述", status:"review", assessment },
+    { id:"22222222-2222-4222-8222-222222222222", requirement:"已完成的需求描述", status:"submitted", assessment, url:"https://github.com/a/b/issues/9" },
+  ];
+  const app = page({ handler: () => ({ ok:true, status:200, json: async () => ({ ...STATUS, drafts:{ busy:false, items } }) }) });
+  app.elements.token.value = TOKEN;
+  app.elements.connect.dispatch("click");
+  await tick();
+  const rows = () => app.elements.draftList.children.filter(node => node.className === "queue-item");
+  assert.equal(rows().length, 1, "only the active draft is listed by default");
+  app.elements.draftFilters.children.find(button => button.dataset.filter === "done").dispatch("click");
+  await tick();
+  const details = app.elements.draftList.children.find(node => node.tagName === "details");
+  assert.ok(details, "completed section renders when filtering by 已完成");
+  assert.equal(app.elements.draftList.children.filter(node => node.className === "queue-item").length, 0);
+});
+
+test("milestone detail filters by merge state", async () => {
+  const stages = [{ id:"M2", name:"多 Agent", total:2, merged:1, running:0, paused:0, unknown:0, issues:[4,5], items:[
+    { number:4, title:"未合入任务", state:"OPEN", labels:[], merged:false, url:null },
+    { number:5, title:"已合入任务", state:"CLOSED", labels:[], merged:true, url:null },
+  ] }];
+  const snapshot = { ...STATUS, github:{ status:"ok", updatedAt:null, tasks:{ __roadmap:{ stages, unclassified:0, limited:false } } } };
+  const app = page({ handler: () => ({ ok:true, status:200, json: async () => snapshot }) });
+  app.elements.token.value = TOKEN;
+  app.elements.connect.dispatch("click");
+  await tick();
+  const card = app.elements.roadmapCards.children.find(node => /M2/.test(node.getAttribute("aria-label") ?? ""));
+  card.dispatch("click");
+  await tick();
+  const rows = () => app.elements.milestoneDetails.children.filter(node => node.className === "milestone-detail-row");
+  assert.equal(rows().length, 2);
+  app.elements.milestoneFilters.children.find(button => button.dataset.filter === "done").dispatch("click");
+  await tick();
+  assert.equal(rows().length, 1);
+  assert.match(rows()[0].children[0].textContent, /已合入任务/);
 });
 
 test("milestone detail falls back to local checkpoints when GitHub is unavailable", async () => {
