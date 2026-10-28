@@ -40,13 +40,29 @@ function node() {
     replaceChildren(...items) { result.replacements++; children.splice(0,children.length,...items); for(const x of items) x.parent = result; },
     append(...items) { children.push(...items); for(const x of items) x.parent = result; },
     prepend(...items) { children.unshift(...items); for(const x of items) x.parent = result; },
-    querySelectorAll(selector) { const all=[];const visit=n=>{for(const c of n.children || []){if(selector==='fieldset' && c.tagName==='fieldset' || selector==='input:checked' && c.tagName==='input' && c.checked)all.push(c);visit(c);}};visit(result);return all; },
+    querySelectorAll(selector) {
+      // 测试桩：支持 fieldset / input:checked / [attr] 三种选择器
+      const attr = /^\[([\w-]+)\]$/.exec(selector)?.[1] ?? null;
+      const all = [];
+      const visit = n => {
+        for (const c of n.children || []) {
+          if (selector === "fieldset" && c.tagName === "fieldset") all.push(c);
+          else if (selector === "input:checked" && c.tagName === "input" && c.checked) all.push(c);
+          else if (attr && c.getAttribute?.(attr) != null) all.push(c);
+          visit(c);
+        }
+      };
+      visit(result);
+      return all;
+    },
     closest(selector) {
-      // 测试桩：沿 parent 向上找匹配 [data-tip] 的节点；真实浏览器由 Element.closest 提供。
+      // 测试桩：沿 parent 向上按属性或类名匹配，等价于 Element.closest。
       const attr = /^\[([\w-]+)\]$/.exec(selector)?.[1];
+      const cls = selector.startsWith(".") ? selector.slice(1) : null;
       let node = result;
       while (node) {
-        if (attr ? node.attributes?.[attr] !== undefined : node.className === selector.replace(/^\./, "")) return node;
+        if (attr && node.getAttribute?.(attr) != null) return node;
+        if (cls && node.className === cls) return node;
         node = node.parent;
       }
       return null;
@@ -93,8 +109,15 @@ function page({ storage = new Map(), handler = () => response(), hidden = false,
     setItem(key, value) { storage.set(key, String(value)); },
     removeItem(key) { storage.delete(key); },
   };
+  const windowListeners = new Map();
+  const windowStub = {
+    addEventListener(type, fn) { const set = windowListeners.get(type) ?? new Set(); set.add(fn); windowListeners.set(type, set); },
+    removeEventListener(type, fn) { windowListeners.get(type)?.delete(fn); },
+    dispatch(type, event = {}) { for (const fn of [...(windowListeners.get(type) ?? [])]) fn(event); },
+    isSecureContext: secureContext,
+  };
   runInNewContext(APP, {
-    document, navigator: navClipboard ? { clipboard: navClipboard } : {}, window:{addEventListener(){}, isSecureContext: secureContext}, ...(streamSupport ? {AbortController, TextDecoder} : {}), sessionStorage, localStorage: { getItem(key) { return preferences.get(key) ?? null; }, setItem(key, value) { preferences.set(key, String(value)); } },
+    document, navigator: navClipboard ? { clipboard: navClipboard } : {}, window: windowStub, ...(streamSupport ? {AbortController, TextDecoder} : {}), sessionStorage, localStorage: { getItem(key) { return preferences.get(key) ?? null; }, setItem(key, value) { preferences.set(key, String(value)); } },
     setInterval() {}, setTimeout() { return 1; }, clearTimeout() {},
     AbortSignal: { timeout() { return undefined; } },
     fetch: async (path, options) => {
@@ -113,7 +136,7 @@ function page({ storage = new Map(), handler = () => response(), hidden = false,
     }
     (confirmResult ? elements.confirmAccept : elements.confirmCancel).dispatch("click");
   };
-  return { elements, actions, document, storage, requests, clipboard };
+  return { elements, actions, document, storage, requests, clipboard, window: windowStub };
 }
 
 test("authenticated token survives same-tab reload and reconnects automatically", async () => {
@@ -965,5 +988,52 @@ test("opening a dialog cancels any leftover exit animation", async () => {
   view.elements.openModels.dispatch("click");
   await tick();
   assert.equal(cancelled, 1, "residual exit animation is cancelled before showing the dialog");
+});
+
+test("dragging a draft handle reorders the queue", async () => {
+  const items = [
+    { id: "11111111-1111-4111-8111-111111111111", requirement: "第一条待排序需求的内容", status: "draft" },
+    { id: "22222222-2222-4222-8222-222222222222", requirement: "第二条待排序需求的内容", status: "draft" },
+  ];
+  const app = page({ handler: () => ({ ok: true, status: 200, json: async () => ({ ...STATUS, drafts: { busy: false, items } }) }) });
+  app.elements.token.value = TOKEN;
+  app.elements.connect.dispatch("click");
+  await tick();
+
+  const list = app.elements.draftList;
+  const rows = list.children.filter(row => row.className === "queue-item");
+  assert.equal(rows.length, 2, "two draft rows render");
+  // 测试桩没有布局：给行补几何，模拟真实位置
+  rows[0].getBoundingClientRect = () => ({ top: 0, bottom: 24, height: 24, left: 0, right: 400 });
+  rows[1].getBoundingClientRect = () => ({ top: 30, bottom: 54, height: 24, left: 0, right: 400 });
+  const handle = rows[0].children.find(child => child.className === "drag-handle");
+  assert.ok(handle, "row exposes a drag handle");
+
+  list.dispatch("pointerdown", { target: handle, clientY: 10, pointerId: 1, preventDefault() {} });
+  app.window.dispatch("pointermove", { clientY: 40, pointerId: 1, preventDefault() {} });
+  assert.match(rows[0].className, /dragging/, "row enters dragging state after moving past the threshold");
+  app.window.dispatch("pointerup", {});
+  await tick();
+
+  const request = app.requests.find(r => r.path === "/api/drafts-reorder");
+  assert.ok(request, "reorder request is sent on drop");
+  assert.equal(JSON.parse(request.options.body).beforeId, items[1].id, "drops before the second row");
+});
+
+test("a click without movement does not reorder", async () => {
+  const items = [{ id: "11111111-1111-4111-8111-111111111111", requirement: "只有一条需求时点击手柄", status: "draft" }];
+  const app = page({ handler: () => ({ ok: true, status: 200, json: async () => ({ ...STATUS, drafts: { busy: false, items } }) }) });
+  app.elements.token.value = TOKEN;
+  app.elements.connect.dispatch("click");
+  await tick();
+  const list = app.elements.draftList;
+  const row = list.children.find(r => r.className === "queue-item");
+  row.getBoundingClientRect = () => ({ top: 0, bottom: 24, height: 24, left: 0, right: 400 });
+  const handle = row.children.find(child => child.className === "drag-handle");
+  list.dispatch("pointerdown", { target: handle, clientY: 10, pointerId: 1, preventDefault() {} });
+  app.window.dispatch("pointermove", { clientY: 12, pointerId: 1, preventDefault() {} });
+  app.window.dispatch("pointerup", {});
+  await tick();
+  assert.equal(app.requests.filter(r => r.path === "/api/drafts-reorder").length, 0, "no reorder for a 2px jitter");
 });
 
