@@ -242,6 +242,9 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
           const developerActivity = createPiActivityReporter(issue.number, "developer");
           let dev;
           try { dev = await runPi({ cwd: wt.directory, timeouts: policy.timeouts, modelSelection: roleModels.developer, onEvent: developerActivity.onEvent,
+        // 延时申请：慢命令（cargo test/build 等）由白名单判定，命中才抬高 idle 预算。
+        idleExtensionSeconds: policy.timeouts?.idleExtensionSeconds,
+        slowCommandPrefixes: policy.idleSlowCommands,
             prompt: promptFor("Developer", mainDocs + "\n" + devRole, issue,
               state.mergeConflict ? [
                 "MANDATORY MAIN INTEGRATION: Git HEAD has been safely fast-forwarded to latest origin/main.",
@@ -294,6 +297,9 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
           const reviewerActivity = createPiActivityReporter(issue.number, "reviewer");
           let review;
           try { review = await runPi({ cwd: wt.directory, timeouts: { ...policy.timeouts, piHardMinutes: policy.timeouts.reviewHardMinutes }, modelSelection: roleModels.reviewer, onEvent: reviewerActivity.onEvent,
+            // 延时申请：慢命令（cargo test/build 等）由白名单判定，命中才抬高 idle 预算。
+            idleExtensionSeconds: policy.timeouts?.idleExtensionSeconds,
+            slowCommandPrefixes: policy.idleSlowCommands,
             prompt: `${reviewRole}\n\n${mainDocs}\n\nReview the staged diff versus HEAD for Issue #${issue.number}: ${issue.title}. Do not edit files.${state.lastReview ? "\n\nPREVIOUS REVIEW FINDINGS (unresolved until proven otherwise; verify each one against the current tree):\n" + state.lastReview + "\nRequirement: your SOXU_REVIEW_RESULT must include a findings array, one entry per item above, each {\"item\": \"...\", \"status\": \"resolved\" or \"unresolved\", \"evidence\": \"...\"}. Approving while any item is missing or unresolved is not allowed." : ""}\nUse git diff --cached to read the implementation.\nReturn only the required SOXU_REVIEW_RESULT JSON marker on its own final line.`, signal }); reviewerActivity.finish(true); }
           catch (error) { reviewerActivity.finish(false); throw error; }
           await inspectChanges(wt.directory, state.base, policy);

@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { LoopFailure, classifyFailure } from "./errors.mjs";
 import { modelArgs } from "./agent-models.mjs";
+import { extractCommand, idleBudgetFor, IDLE_EXTENSION_DEFAULT_SECONDS, SLOW_COMMAND_DEFAULTS } from "./idle-extension.mjs";
 
 export class LineFramer {
   constructor(onRecord, maxLineSize = 32 * 1024 * 1024) { this.buffer = ""; this.onRecord = onRecord; this.maxLineSize = maxLineSize; }
@@ -60,10 +61,10 @@ export function piArgv(modelSelection, readOnly = false, intakeReadTools = false
 export function resolvePiTimeouts({ timeoutMs, timeouts = {} } = {}) {
   const hardMs = timeoutMs ?? (timeouts.piHardMinutes ?? 35) * 60000;
   const startupMs = Math.min(hardMs, (timeouts.piStartupSeconds ?? 90) * 1000);
-  const idleMs = Math.min(hardMs, (timeouts.piIdleSeconds ?? 240) * 1000);
+  const baseIdleMs = Math.min(hardMs, (timeouts.piIdleSeconds ?? 240) * 1000);
   const graceMs = Math.min((timeouts.shutdownGraceSeconds ?? 5) * 1000, 10000);
-  if (![hardMs,startupMs,idleMs,graceMs].every(Number.isFinite) || hardMs < 30 || startupMs < 1 || idleMs < 1 || graceMs < 0) throw new Error("Invalid Pi timeouts");
-  return { hardMs, startupMs, idleMs, graceMs };
+  if (![hardMs,startupMs,baseIdleMs,graceMs].every(Number.isFinite) || hardMs < 30 || startupMs < 1 || baseIdleMs < 1 || graceMs < 0) throw new Error("Invalid Pi timeouts");
+  return { hardMs, startupMs, baseIdleMs, graceMs };
 }
 
 /**
@@ -71,7 +72,10 @@ export function resolvePiTimeouts({ timeoutMs, timeouts = {} } = {}) {
  * the idle window but never the hard deadline. Quota/network errors are returned
  * to the coordinator; this function never automatically replays a paid prompt.
  */
-export async function runPi({ cwd, prompt, timeoutMs, timeouts, onEvent = () => {}, signal, modelSelection, readOnly = false, intakeReadTools = false } = {}) {
+export async function runPi({ cwd, prompt, timeoutMs, timeouts, onEvent = () => {}, signal, modelSelection, readOnly = false, intakeReadTools = false,
+  idleExtensionSeconds = IDLE_EXTENSION_DEFAULT_SECONDS, slowCommandPrefixes = SLOW_COMMAND_DEFAULTS } = {}) {
+  const extensionSeconds = idleExtensionSeconds;
+  const prefixes = slowCommandPrefixes;
   const budgets = resolvePiTimeouts({ timeoutMs, timeouts });
   const binary = process.env.SOXU_PI_BIN || "pi";
   const win = process.platform === "win32";
@@ -88,20 +92,33 @@ export async function runPi({ cwd, prompt, timeoutMs, timeouts, onEvent = () => 
   const startedAt = lastActivity;
   const id = `soxu-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2)}`;
   return await new Promise((resolve, reject) => {
+    // 延时申请：idle 预算可被慢命令（cargo build/test 等）临时抬高。见 idle-extension.mjs。
+    let idleMs = budgets.baseIdleMs;
     const watchdog = setInterval(() => {
       if (finished) return;
       const now = Date.now();
       const elapsed = now - startedAt;
       if (elapsed >= budgets.hardMs) return fail(new LoopFailure("timeout", `Pi hard deadline exceeded (${Math.round(budgets.hardMs / 1000)}s)`));
       if (!accepted && elapsed >= budgets.startupMs) return fail(new LoopFailure("timeout", `Pi startup/accept timeout (${Math.round(budgets.startupMs / 1000)}s)`));
-      if (accepted && now - lastActivity >= budgets.idleMs) return fail(new LoopFailure("timeout", `Pi inactive for ${Math.round(budgets.idleMs / 1000)}s`));
-    }, Math.min(250, budgets.startupMs, budgets.idleMs, budgets.hardMs));
+      if (accepted && now - lastActivity >= idleMs) return fail(new LoopFailure("timeout", `Pi inactive for ${Math.round(idleMs / 1000)}s${idleMs > budgets.baseIdleMs ? "（含慢命令延时）" : ""}`));
+    }, Math.min(250, budgets.startupMs, budgets.baseIdleMs, budgets.hardMs));
     let hardKillTimer;
     const onAbort = () => fail(new LoopFailure("interrupted", "Pi run interrupted; worktree preserved"));
     signal?.addEventListener("abort", onAbort, { once: true });
     const framer = new LineFramer(msg => {
       // Only structured Pi events count as meaningful progress, not stderr noise.
       lastActivity = Date.now();
+      // 延时申请批准点：工具启动时判定命令是否命中慢命令白名单。
+      if (msg.type === "tool_execution_start" && idleBudgetFor) {
+        const command = extractCommand(msg.args);
+        if (command) {
+          const granted = idleBudgetFor({ command, baseIdleMs: budgets.baseIdleMs, extensionSeconds, hardMs: budgets.hardMs, prefixes });
+          if (granted !== idleMs) {
+            idleMs = granted;
+            onEvent({ type: "soxu:idle_extension", grantedMs: granted, commandPreview: command.slice(0, 120) });
+          }
+        }
+      }
       onEvent(msg);
       if (msg.type === "response" && msg.id === id) {
         if (!msg.success) return fail(classifyFailure(new Error(`Pi rejected prompt: ${JSON.stringify(msg.error ?? "unknown")}`)));

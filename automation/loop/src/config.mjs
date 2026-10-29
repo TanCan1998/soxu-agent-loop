@@ -61,6 +61,13 @@ export async function policy() {
     if (!Number.isSafeInteger(t[name]) || t[name] < min || t[name] > max) throw new Error(`Invalid timeouts.${name} (expected ${min}..${max})`);
   }
   if (t.piHardMinutes * 60 <= t.piStartupSeconds || t.piHardMinutes * 60 <= t.piIdleSeconds) throw new Error("Hard timeout must exceed startup/idle timeout");
+  // 延时申请：慢命令（cargo test/build 等）命中白名单时 idle 预算抬高的秒数上限。
+  if (t.idleExtensionSeconds !== undefined && (!Number.isSafeInteger(t.idleExtensionSeconds) || t.idleExtensionSeconds < 0 || t.idleExtensionSeconds > 1800))
+    throw new Error("Invalid timeouts.idleExtensionSeconds (expected 0..1800)");
+  if (value.idleSlowCommands !== undefined) {
+    if (!Array.isArray(value.idleSlowCommands) || value.idleSlowCommands.length > 40 || !value.idleSlowCommands.every(c => typeof c === "string" && /^[a-z][a-z0-9 _.-]{1,40}$/i.test(c)))
+      throw new Error("Invalid policy: idleSlowCommands must be an array of simple command prefixes");
+  }
   if (value.recovery?.automaticApiRetries !== 0 || !value.recovery?.preserveWorktree || !value.recovery?.manualOnQuota || !value.recovery?.manualOnNetwork) throw new Error("Bootstrap recovery policy requires no automatic API retries and preserved worktrees");
   if (value.releaseChannel !== "prerelease") throw new Error("Only prerelease is permitted in bootstrap");
   // main is release-only; agents integrate into a separate branch.
