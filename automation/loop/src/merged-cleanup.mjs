@@ -95,10 +95,13 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
         }
         log("Cleanup #"+n+": PR head 偏离 checkpoint（人工合并冲突），但 checkpoint 改动完整在 PR head 中，放行清理");
       }
+      // head 偏离但已验明内容完整时，清理要以 PR 的实际 head 为基准，
+      // 否则 remote/local 永远与 checkpoint 的旧 sha 不符 → 每轮都"保留现场"。
+      const expectedHead = pr.headRefOid !== sha ? pr.headRefOid : sha;
       const remote=(await exec("git",["ls-remote","--heads","origin",`refs/heads/${branch}`])).stdout.trim();
       let remoteStatus="absent";
-      if(remote){if(remote!==`${sha}\trefs/heads/${branch}`) remoteStatus="changed";
-        else {await exec("git",["push",`--force-with-lease=refs/heads/${branch}:${sha}`,"origin",`:refs/heads/${branch}`]);remoteStatus="deleted";}}
+      if(remote){if(remote!==`${expectedHead}\trefs/heads/${branch}`) remoteStatus="changed";
+      else {await exec("git",["push",`--force-with-lease=refs/heads/${branch}:${expectedHead}`,"origin",`:refs/heads/${branch}`]);remoteStatus="deleted";}}
       if(remoteStatus==="changed") {fresh.cleanup={complete:false,remote:"changed",local:"preserved",checkedAt:new Date().toISOString()};await writeCheckpoint(fresh,checkpointDir);results.push({issue:n,status:"preserved",remote:"changed",local:"preserved"});continue;}
       const listingRaw=(await exec("git",["worktree","list","--porcelain","-z"])).stdout;
       if(listingRaw.length>=990000) throw Error("worktree-list-too-large");
@@ -109,7 +112,10 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
       const ref=await exec("git",["show-ref","--verify","--quiet",`refs/heads/${branch}`],{allowFailure:true});
       if(ref.code===0){
         const refHash=await exec("git",["show-ref","--verify","--hash",`refs/heads/${branch}`]);
-        if(refHash.stdout.trim()!==sha) localStatus="changed";
+        // 人工合并冲突后本地分支可能停在 checkpoint 提交（未做 merge），
+      // 而 PR head 是合并后的提交；两者都代表"这条分支的工作已进集成分支"。
+      const localHead=refHash.stdout.trim();
+      if(localHead!==expectedHead && localHead!==sha) localStatus="changed";
         else if(holders.length>1 || holders.some(x=>x.locked) || (holders.length && !samePath(await realpath(holders[0].path),await realpath(expected)))) localStatus="other-worktree";
         else {
           if(holders.length){

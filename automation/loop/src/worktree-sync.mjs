@@ -79,7 +79,20 @@ async function inspect(root, state, base = "main") {
     if (intent && head !== intent.from && head !== intent.to) info.reason = "unexpected-sync-head";
     else if (state.status !== "running" && state.status !== "paused" && state.status !== "blocked") info.reason = "not-recoverable";
     else if (info.lock === "active" || info.lock === "unsafe") info.reason = "worktree-locked";
-    else if (!intent && state.base && state.base !== head) info.reason = "checkpoint-base-mismatch";
+    // 恢复优化（2026-10-29）：head 偏离 base 但 parent === base 且工作区干净，
+    // 说明 agent 留下了一个待验证任务提交（被"不得直接 commit"闸拦下的成果）。
+    // worker 的恢复路径会把它认回 state.commit 并走正常验证流程，这里同步放行。
+    else if (!intent && state.base && state.base !== head) {
+      let recoverableCommit = false;
+      try {
+        if (!info.dirty) {
+          const parent = await git(["rev-parse", "HEAD^"], state.directory);
+          recoverableCommit = parent === state.base;
+        }
+      } catch { /* 无父提交 */ }
+      if (recoverableCommit) { info.reason = "agent-commit-recoverable"; info.canSync = false; }
+      else info.reason = "checkpoint-base-mismatch";
+    }
     else if (info.ahead > 0) info.reason = "diverged-from-" + base;
     // A checkpoint in tests/review/install can resume on an already-current
     // branch without invalidating its tested/reviewed evidence.
@@ -252,7 +265,7 @@ export async function prepareWorktreeRecovery(states, options = {}) {
       eligible.push(state);
       continue;
     }
-    const allowed = row && (["synced", "synced-conflicts", "up-to-date", "no-worktree"].includes(row.reason));
+    const allowed = row && (["synced", "synced-conflicts", "up-to-date", "no-worktree", "agent-commit-recoverable"].includes(row.reason));
     if (allowed) {
       if (row.reason === "synced-conflicts")
         console.log("Worktree #" + row.issue + " rebased onto latest main with recoverable conflicts; Pi Developer will resolve from stash backup.");

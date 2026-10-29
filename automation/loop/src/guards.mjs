@@ -10,8 +10,16 @@ export function slug(value) { return value.toLowerCase().replace(/[^a-z0-9]+/g, 
 export function validIssue(issue) { return Number.isInteger(issue.number) && issue.number > 0 && issue.number < 1e9; }
 
 export async function inspectChanges(cwd, base, policy) {
-  if (await git(["rev-parse", "HEAD"], cwd) !== base) throw new Error("Agent changed Git HEAD/committed directly");
-  const modified = (await git(["diff", "--name-only", "-z", "HEAD"], cwd)).split("\0").filter(Boolean);
+  // 恢复提交场景（2026-10-29）：被"不得直接 commit"闸拦下的任务会留下一个
+  // parent === base 的提交（worker 恢复路径已认回 state.commit）。此时改动的
+  // 正确基准是 base 而不是 HEAD：把已提交内容纳入同样的预算与保护路径检查。
+  const head = await git(["rev-parse", "HEAD"], cwd);
+  if (head !== base) {
+    const parent = await git(["rev-parse", "HEAD^"], cwd).catch(() => null);
+    if (parent !== base) throw new Error("Agent changed Git HEAD/committed directly");
+  }
+  const diffBase = head === base ? "HEAD" : base;
+  const modified = (await git(["diff", "--name-only", "-z", diffBase], cwd)).split("\0").filter(Boolean);
   const staged = (await git(["diff", "--cached", "--name-only", "-z"], cwd)).split("\0").filter(Boolean);
   const added = (await git(["ls-files", "--others", "--exclude-standard", "-z"], cwd)).split("\0").filter(Boolean);
   const paths = [...new Set([...modified, ...staged, ...added])];
