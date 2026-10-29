@@ -55,7 +55,17 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
       const pushMatch=/^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(pushOrigin);
       if(!originMatch || !pushMatch || originMatch[1].toLowerCase()!==repo.toLowerCase() || pushMatch[1].toLowerCase()!==repo.toLowerCase()) throw Error("origin-mismatch");
       const pr=JSON.parse((await exec("gh",["pr","view",state.pr,"--json","state,mergedAt,baseRefName,headRefName,headRefOid,isCrossRepository"])).stdout);
-      if(pr.state!=="MERGED" || !pr.mergedAt || pr.baseRefName!==base || pr.headRefName!==branch || pr.headRefOid!==sha || pr.isCrossRepository!==false) {results.push({issue:n,status:"not-verified"});continue;}
+      // head 与 checkpoint 不一致说明分支在任务后被推过（例如同步集成分支）；
+      // 保守起见保留现场不清理，但必须把原因报出来——之前这里是静默跳过，
+      // 统计只算 cleaned/preserved/errors，界面上看起来像"什么都没发生"。
+      if(pr.state!=="MERGED" || !pr.mergedAt || pr.baseRefName!==base || pr.headRefName!==branch || pr.isCrossRepository!==false) {
+        results.push({issue:n,status:"not-verified",reason:"pr-state"});continue;
+      }
+      if(pr.headRefOid!==sha) {
+        results.push({issue:n,status:"not-verified",reason:"head-changed"});
+        log("Cleanup #"+n+": PR head "+String(pr.headRefOid).slice(0,8)+" ≠ checkpoint "+sha.slice(0,8)+"，保留现场待人工核实");
+        continue;
+      }
       const remote=(await exec("git",["ls-remote","--heads","origin",`refs/heads/${branch}`])).stdout.trim();
       let remoteStatus="absent";
       if(remote){if(remote!==`${sha}\trefs/heads/${branch}`) remoteStatus="changed";
