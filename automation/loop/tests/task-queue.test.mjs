@@ -49,13 +49,15 @@ test('real catalog keeps every finished task archived and schedules nothing', as
   const catalog = await loadTaskCatalog();
   validateTaskCatalog(catalog); // archived tasks still satisfy dependencies
   const plan = planTaskQueue(catalog, new Set());
-  // TASK-001..006 are merged/archived; the newest backlog entries are schedulable.
-  assert.deepEqual(plan.ready.map(t => t.id), ['TASK-007', 'TASK-008']);
-  assert.deepEqual(plan.waiting.map(t => t.id), []);
-  assert.deepEqual([...catalog].map(t => t.id).sort(),
-    ['TASK-001','TASK-002','TASK-003','TASK-004','TASK-005','TASK-006','TASK-007','TASK-008']);
-  assert.ok(catalog.filter(t => !['TASK-007','TASK-008'].includes(t.id)).every(t => t.archived),
-    'finished tasks stay archived');
+  // 真实 catalog 会随 SOXU 的进度变化（backlog 里的任务做完就归档），
+  // 所以断言不变量而不是具体任务号：归档任务永不调度，未归档任务要么 ready 要么 waiting。
+  assert.ok(catalog.length > 0, 'real catalog is not empty');
+  const queued = [...plan.ready, ...plan.waiting].map(t => t.id);
+  const archivedIds = new Set(catalog.filter(t => t.archived).map(t => t.id));
+  assert.deepEqual(queued.filter(id => archivedIds.has(id)), [], 'archived tasks never scheduled');
+  assert.deepEqual(queued.slice().sort(),
+    catalog.filter(t => !t.archived).map(t => t.id).sort(),
+    'every unarchived task is accounted for');
 });
 
 test('frontmatter rejects duplicate dependencies, unknown refs, cycles and inconsistent ids', () => {
