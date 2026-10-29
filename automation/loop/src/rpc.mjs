@@ -31,6 +31,11 @@ export function parseReview(text) {
 
 function safeEnvironment() {
   const env = { ...process.env };
+  // Agent 会话标记：SOXU 的 pre-commit 会据此拒绝直接 git commit，
+  // 强制改动留在工作区由 Runner 提交（否则会绕过 testedTree/reviewedTree 校验）。
+  // 同时清掉提权标记，绝不让 Agent 继承 Runner 的提交权限。
+  env.SOXU_AGENT_SESSION = "1";
+  delete env.SOXU_ALLOW_COMMIT;
   for (const key of ["GH_TOKEN", "GITHUB_TOKEN", "ATOMGIT_TOKEN", "GIT_ASKPASS", "SSH_ASKPASS", "AWS_SECRET_ACCESS_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]) delete env[key];
   return env;
 }
