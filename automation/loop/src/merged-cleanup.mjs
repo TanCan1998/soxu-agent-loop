@@ -12,6 +12,10 @@ async function closeMergedIssue(exec, state, n, base) {
   try {
     const seen = JSON.parse((await exec("gh", ["issue", "view", String(n), "--json", "state"])).stdout);
     if (seen.state !== "OPEN") { state.issueClosed = "already-closed"; return "already-closed"; }
+    // 关闭前清掉「未完成」状态标签：已合入的任务不该继续挂着 in-progress/paused/blocked。
+    const view = JSON.parse((await exec("gh", ["issue", "view", String(n), "--json", "labels"])).stdout);
+    const stale = (view.labels ?? []).map(x => x.name).filter(name => ["agent:in-progress", "agent:paused", "agent:blocked", "agent:ready", "agent:waiting"].includes(name));
+    if (stale.length) await exec("gh", ["issue", "edit", String(n), ...stale.flatMap(name => ["--remove-label", name])]);
     await exec("gh", ["issue", "close", String(n), "--comment", `已合入集成分支 ${base}；release 发布到 main 后随版本生效。`]);
     state.issueClosed = "closed";
     return "closed";
