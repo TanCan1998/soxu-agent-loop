@@ -138,6 +138,8 @@ export class DashboardCoordinator extends EventEmitter {
     this.reserved = false;
     this.lastRun = null;
     this.lines = [];
+    // 日志回填只做一次：runner 输出原本只活在内存里，dashboard 重启后就查不到历史。
+    this.logBackfillTried = false;
     this.serial = 0;
     this.instanceId = randomBytes(8).toString("hex");
     this.agents = new Map();
@@ -339,7 +341,37 @@ export class DashboardCoordinator extends EventEmitter {
     this.cleanupNext=Date.now()+60000;
     this.cleanupPending=Promise.resolve(integrationBase()).then(base=>cleanupMergedTasks(this.root,{signal:this.cleanupController.signal,log:message=>this.push(message),base})).catch(e=>this.push(`Merged cleanup unavailable: ${e.message}`)).finally(()=>{this.cleanupPending=null;});
   }
+  /**
+   * 从 .soxu/runner 最新的日志文件回填一次日志。
+   *
+   * 历史缺陷：`log` 字段只有内存态，dashboard 因 hot update 重启后为空，
+   * 排查"任务为什么失败"时无从下手（runner 日志其实一直在写文件）。
+   */
+  async backfillLogFromRunnerFile() {
+    if (this.lines.length || this.logBackfillTried) return;
+    this.logBackfillTried = true;
+    try {
+      const dir = join(this.root, ".soxu", "runner");
+      const files = await readdir(dir).catch(() => []);
+      const logs = [];
+      for (const name of files) {
+        if (!name.endsWith(".log")) continue;
+        const info = await stat(join(dir, name)).catch(() => null);
+        if (info) logs.push({ name, mtimeMs: info.mtimeMs });
+      }
+      if (!logs.length) return;
+      logs.sort((a, b) => b.mtimeMs - a.mtimeMs);
+      const text = await readFile(join(dir, logs[0].name), "utf8").catch(() => "");
+      const rows = text.split(/\r?\n/).filter(line => line.trim()).slice(-200);
+      if (!rows.length) return;
+      for (const line of rows) {
+        this.lines.push({ seq: ++this.serial, time: null, stream: "runner", message: cleanLine(line) });
+      }
+      this.push(`(recovered ${rows.length} log lines from ${logs[0].name})`, "system");
+    } catch { /* 回填失败不能影响状态接口 */ }
+  }
   async snapshot() {
+    await this.backfillLogFromRunnerFile();
     this.refreshCleanup();
     this.refreshGithub();
     this.refreshLanes();

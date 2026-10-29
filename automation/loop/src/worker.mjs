@@ -63,11 +63,42 @@ async function worktreeFor(issue, local, state, base = "main") {
   const branch = `agent/${local ? "local" : "github"}-issue-${issue.number}-${slug(issue.title)}`;
   const directory = join(WORKTREES, `${local ? "local" : "github"}-issue-${issue.number}-${slug(issue.title)}`);
   if (!local) await git(["fetch", "origin", base], ROOT);
-  // The branch and path might exist after an interruption between git and checkpoint write.
-  try { await stat(directory); }
-  catch (err) {
-    if (err.code !== "ENOENT") throw err;
-    await git(["worktree", "add", "-b", branch, directory, local ? base : "origin/" + base], ROOT);
+  // 幂等准备：中断或人工清理后常留下两种残骸，历史上都会让任务直接 blocked——
+  //   1) 目录在但 .git 已被删 → 旧代码 stat 成功就跳过创建，随后 git branch 报 not a git repository
+  //   2) 分支在但 worktree 没了 → worktree add -b 报 branch already exists
+  let dirExists = false;
+  try { await stat(directory); dirExists = true; }
+  catch (err) { if (err.code !== "ENOENT") throw err; }
+  let dirReady = false;
+  if (dirExists) {
+    try {
+      const top = await git(["rev-parse", "--show-toplevel"], directory);
+      dirReady = samePath(await realpath(top), await realpath(directory));
+    } catch { dirReady = false; }
+    if (!dirReady) {
+      console.warn(`Removing stale worktree directory (no .git): ${directory}`);
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+  let branchReady = false;
+  try { await git(["rev-parse", "--verify", "refs/heads/" + branch], ROOT); branchReady = true; }
+  catch { branchReady = false; }
+  if (branchReady && !dirReady) {
+    // 分支残留：只有它相对集成分支没有独有提交时才删除重建，避免丢掉未推送的工作。
+    let ahead = "0";
+    try { ahead = (await git(["rev-list", "--count", `${local ? base : "origin/" + base}..${branch}`], ROOT)).trim(); }
+    catch { ahead = "0"; }
+    if (Number(ahead) === 0) {
+      console.warn(`Removing stale branch (no unique commits): ${branch}`);
+      await git(["branch", "-D", branch], ROOT);
+      branchReady = false;
+    }
+  }
+  if (!dirReady) {
+    const addArgs = branchReady
+      ? ["worktree", "add", directory, branch]
+      : ["worktree", "add", "-b", branch, directory, local ? base : "origin/" + base];
+    await git(addArgs, ROOT);
   }
   const foundBranch = await git(["branch", "--show-current"], directory);
   if (foundBranch !== branch) throw new Error("Worktree already exists but belongs to another branch");
@@ -166,6 +197,44 @@ export async function pinTaskModels(state, issueNumber, load, persist) {
 }
 
 /** Resume from the last durable phase rather than creating a duplicate branch or PR. */
+/**
+ * 读取 PR 的合并状态。
+ *
+ * 存在原因：`gh pr merge --auto` 只是「请求自动合并」，命令立即返回，
+ * 不代表 GitHub 最终会合并成功（冲突、必需检查卡住、分支保护变化都会让它停在 OPEN）。
+ */
+async function inspectPr(prUrl) {
+  const { stdout } = await run("gh", ["pr", "view", prUrl, "--json", "state,mergeable,mergeStateStatus,mergedAt"],
+    { cwd: ROOT, timeoutMs: 45000 });
+  return JSON.parse(stdout);
+}
+
+/**
+ * 等待 PR 真正合并。
+ *
+ * 历史缺陷（2026-10-29 实测）：merge 阶段请求自动合并后直接写 done，
+ * 冲突的 PR 无人重试，issue 卡在 agent:pr 永不关闭，需要人工 rebase。
+ * 现在必须轮询到 MERGED 才允许进入 done；冲突/关闭立刻抛 LoopFailure。
+ */
+async function waitForMerged(prUrl, { policy, signal }) {
+  const limitMs = (policy.timeouts?.autoMergeMinutes ?? 20) * 60000;
+  const deadline = Date.now() + limitMs;
+  let last = "";
+  while (Date.now() < deadline) {
+    if (signal?.aborted) throw new LoopFailure("interrupted", "等待合并时被中断");
+    const info = await inspectPr(prUrl);
+    const line = info.state + "/" + (info.mergeable ?? "-") + "/" + (info.mergeStateStatus ?? "-");
+    if (line !== last) { console.log(`PR state: ${line}`); last = line; }
+    if (info.state === "MERGED") return true;
+    if (info.state === "CLOSED") throw new LoopFailure("merge", "PR 在等待合并期间被关闭：" + prUrl);
+    if (info.mergeable === "CONFLICTING" || info.mergeStateStatus === "DIRTY") {
+      throw new LoopFailure("merge", "PR 在等待合并期间变为冲突（mergeable=CONFLICTING）：" + prUrl);
+    }
+    await new Promise(resolve => setTimeout(resolve, 15000));
+  }
+  return false;
+}
+
 export async function processIssue(issue, { policy, local = false, dryRun = false, resume = false, allowBlocked = false, signal } = {}) {
   console.log(`${resume ? "resume" : "task"} #${issue.number}: ${issue.title}`);
   if (dryRun) return { status: "dry-run", issue: issue.number };
@@ -393,7 +462,19 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
           state.pr = rows[0]?.url || await createPr(issue.number, state.branch, state.summary, base);
           await checkpoint("merge"); break;
         }
-        case "merge":
+        case "merge": {
+          // 合并前先验状态：冲突/关闭的 PR 若直接写 done，会产生「孤儿 PR + issue 永不关闭」。
+          const prInfo = await inspectPr(state.pr);
+          if (prInfo.state === "MERGED") { await checkpoint("done"); break; }
+          if (prInfo.state === "CLOSED") {
+            throw new LoopFailure("merge", "PR 已被关闭，无法合并：" + state.pr);
+          }
+          if (prInfo.mergeable === "CONFLICTING" || prInfo.mergeStateStatus === "DIRTY") {
+            state.mergeConflict = true;
+            await writeCheckpoint(state);
+            throw new LoopFailure("merge",
+              "PR 与集成分支 " + base + " 冲突（mergeable=CONFLICTING），需 rebase 后重跑：" + state.pr);
+          }
           // 一次调用完成状态切换并附说明：PR 链接、目标分支、是否已请求自动合并。
           await setTaskState(issue.number, "agent:pr",
             "SOXU 已完成开发与评审，PR 已创建：" + state.pr + "（目标分支 " + base + "）。" +
@@ -404,18 +485,28 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
                 await autoMerge(state.pr);
                 console.log(`Auto-merge requested for ${state.pr} (target ${base})`);
                 state.autoMerge = "requested";
+                await writeCheckpoint(state);
+                // --auto 只是请求；必须等到真正 MERGED，否则不许进入 done。
+                if (!await waitForMerged(state.pr, { policy, signal })) {
+                  throw new LoopFailure("merge",
+                    "自动合并未在 " + (policy.timeouts?.autoMergeMinutes ?? 20) + " 分钟内完成：" + state.pr +
+                    "（检查必需检查是否卡住，或分支保护规则是否变化）");
+                }
+                state.autoMerge = "merged";
               } else {
                 console.warn(`Auto-merge skipped; ${base} required checks not verified: ${state.pr}`);
                 state.autoMerge = "skipped-protection";
               }
             } catch (error) {
-              // Never fail a finished task because auto-merge could not be requested.
+              // 请求合并本身失败（网络/权限）不致命；但「等待合并超时/冲突」必须冒泡成 blocked。
+              if (error instanceof LoopFailure) { await writeCheckpoint(state); throw error; }
               console.warn(`Auto-merge failed for ${state.pr}: ${safeFailureMessage(error, 300)}`);
               state.autoMerge = "failed";
             }
             await writeCheckpoint(state);
           }
           await checkpoint("done"); break;
+        }
         case "done":
           state.status = "done";
           await writeCheckpoint(state);
