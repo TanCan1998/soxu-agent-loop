@@ -113,9 +113,9 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
       if(ref.code===0){
         const refHash=await exec("git",["show-ref","--verify","--hash",`refs/heads/${branch}`]);
         // 人工合并冲突后本地分支可能停在 checkpoint 提交（未做 merge），
-      // 而 PR head 是合并后的提交；两者都代表"这条分支的工作已进集成分支"。
-      const localHead=refHash.stdout.trim();
-      if(localHead!==expectedHead && localHead!==sha) localStatus="changed";
+        // 而 PR head 是合并后的提交；两者都代表"这条分支的工作已进集成分支"。
+        const localHead=refHash.stdout.trim();
+        if(localHead!==expectedHead && localHead!==sha) localStatus="changed";
         else if(holders.length>1 || holders.some(x=>x.locked) || (holders.length && !samePath(await realpath(holders[0].path),await realpath(expected)))) localStatus="other-worktree";
         else {
           if(holders.length){
