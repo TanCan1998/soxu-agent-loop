@@ -14,7 +14,9 @@ async function closeMergedIssue(exec, state, n, base) {
     if (seen.state !== "OPEN") { state.issueClosed = "already-closed"; return "already-closed"; }
     // 关闭前清掉「未完成」状态标签：已合入的任务不该继续挂着 in-progress/paused/blocked。
     const view = JSON.parse((await exec("gh", ["issue", "view", String(n), "--json", "labels"])).stdout);
-    const stale = (view.labels ?? []).map(x => x.name).filter(name => ["agent:in-progress", "agent:paused", "agent:blocked", "agent:ready", "agent:waiting"].includes(name));
+    // agent:pr 也要清：已合入并关闭的 Issue 挂着它会让面板一直显示成"待合并"，
+    // 历史上有 26 个 Issue 因此需要人工清理（2026-10-29）。
+    const stale = (view.labels ?? []).map(x => x.name).filter(name => ["agent:in-progress", "agent:paused", "agent:blocked", "agent:ready", "agent:waiting", "agent:pr"].includes(name));
     if (stale.length) await exec("gh", ["issue", "edit", String(n), ...stale.flatMap(name => ["--remove-label", name])]);
     await exec("gh", ["issue", "close", String(n), "--comment", `已合入集成分支 ${base}；release 发布到 main 后随版本生效。`]);
     state.issueClosed = "closed";
