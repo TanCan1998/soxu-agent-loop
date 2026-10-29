@@ -210,3 +210,29 @@ test("checkpoint at review/postConflictInstall may resume when already on latest
     assert.ok(saved.syncBackup.sha);
   } finally { await rm(f.outer, {recursive:true, force:true}); }
 });
+
+test("a task paused at merge resumes without re-syncing its worktree base", async () => {
+  const { prepareWorktreeRecovery } = await import("../src/worktree-sync.mjs");
+  // 已进入 PR 流程的任务：worktree 的 HEAD 早不是基点，但 PR 已存在，
+  // 恢复只应继续推进合并阶段，不能被 checkpoint-base-mismatch 挡住。
+  const state = {
+    issue: { number: 99 },
+    local: false,
+    status: "paused",
+    phase: "merge",
+    pr: "https://github.com/o/r/pull/99",
+    branch: "agent/github-issue-99-x",
+    directory: "F:/tmp/does-not-exist",
+    base: "a".repeat(40),
+  };
+  const logs = [];
+  const original = console.log;
+  console.log = (...args) => logs.push(args.join(" "));
+  let result;
+  try { result = await prepareWorktreeRecovery([state], { base: "dev" }); }
+  finally { console.log = original; }
+  assert.equal(result.eligible.length, 1, "task past createPr is eligible");
+  assert.equal(result.blocked.length, 0);
+  assert.match(logs.join("\n"), /已进入 PR 流程（merge）/);
+});
+

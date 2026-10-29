@@ -242,6 +242,16 @@ export async function prepareWorktreeRecovery(states, options = {}) {
   for (const state of states) {
     const key = String(Boolean(state.local)) + ":" + state.issue.number;
     const row = byKey.get(key);
+    // 任务已经进入 PR 流程（createPr / merge 及之后）时，工作树里的提交与 PR 都已存在，
+    // 恢复只是继续推进合并阶段，不需要再把基点同步到最新集成分支。
+    // 之前一律要求 base === HEAD，导致"已提交但 merge 阶段失败"的任务永远无法恢复
+    // （checkpoint-base-mismatch）。
+    const pastPr = ["createPr", "merge"].includes(state.phase) && typeof state.pr === "string" && state.pr.length > 0;
+    if (pastPr) {
+      console.log("Worktree #" + state.issue.number + " 已进入 PR 流程（" + state.phase + "），跳过基点同步直接恢复：" + state.pr);
+      eligible.push(state);
+      continue;
+    }
     const allowed = row && (["synced", "synced-conflicts", "up-to-date", "no-worktree"].includes(row.reason));
     if (allowed) {
       if (row.reason === "synced-conflicts")
