@@ -188,6 +188,21 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
     const wt = await worktreeFor(issue, local, state, base);
     state.branch = wt.branch; state.directory = wt.directory;
     state.base ??= await git(["rev-parse", "HEAD"], wt.directory);
+      // 恢复优化（2026-10-29）：agent 在 checks 阶段被"不得直接 commit"闸拦下后，
+      // worktree 里可能留有一个 parent === base 的任务提交（#97 的主题涟漪实现就是
+      // 这样被误判成不可恢复的 checkpoint-base-mismatch）。这里把它认回来：
+      // parent 必须精确等于 checkpoint base、工作区必须干净；state.commit 记录后，
+      // 既有的 verifyCommittedHead / nextPhaseForTree 会继续把关 tree 与流程。
+      if (!state.commit && state.base && state.phase === "checks") {
+        try {
+          const recoveredHead = await git(["rev-parse", "HEAD"], state.directory);
+          const parent = await git(["rev-parse", "HEAD^"], state.directory);
+          if (recoveredHead !== state.base && parent === state.base) {
+            state.commit = recoveredHead;
+            console.log("Recovered #" + issue.number + ": 接受 agent 已提交的 HEAD " + recoveredHead.slice(0, 8) + " 作为待验证提交");
+          }
+        } catch { /* HEAD^ 不存在则保持原状 */ }
+      }
     if (state.phase === "worktree") state.phase = "install";
     await writeCheckpoint(state);
     reportTaskPhase(issue.number, state.phase);
