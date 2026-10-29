@@ -351,7 +351,10 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
             const next = nextPhaseForTree("commit", state, currentTree);
             if (next !== "commit") { await checkpoint(next); break; }
             await git(["commit", "-m", `✨ feat(agent): resolve Issue #${issue.number}`], wt.directory);
-          } else if (last !== `✨ feat(agent): resolve Issue #${issue.number}`) throw new Error("Unexpected HEAD while recovering commit; manual inspection required");
+          } else if (last !== `✨ feat(agent): resolve Issue #${issue.number}` && state.commit !== current)
+            // 恢复路径认回的提交（state.commit === HEAD）保留 agent 自己写的主题；
+            // 真正的不变量由下面 verifyCommittedHead 的 parent/tree 校验把关。
+            throw new Error("Unexpected HEAD while recovering commit; manual inspection required");
           await verifyCommittedHead();
           state.commit = await git(["rev-parse", "HEAD"], wt.directory);
           await checkpoint(local ? "done" : "push"); break;
