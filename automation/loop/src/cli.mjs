@@ -193,7 +193,16 @@ async function start() {
   if (problematic(results)) process.exitCode = 1;
 }
 switch (command) {
-  case "cleanup": { if(local || dryRun) throw new Error("cleanup requires GitHub mode"); const results=await cleanup(); console.log(`Merged cleanup: ${results.filter(x=>x.status==="cleaned").length} cleaned, ${results.filter(x=>x.status==="preserved").length} preserved, ${results.filter(x=>["error","invalid-checkpoint"].includes(x.status)).length} errors; unmerged or locked tasks are retained.`); if(results.some(x=>["error","invalid-checkpoint"].includes(x.status))) process.exitCode=1; break; }
+  case "cleanup": { if(local || dryRun) throw new Error("cleanup requires GitHub mode"); const results=await cleanup();
+    const count = s => results.filter(x=>x.status===s).length;
+    console.log(`Merged cleanup: ${count("cleaned")} cleaned, ${count("preserved")} preserved, ${count("not-verified")} unverified, ${results.filter(x=>["error","invalid-checkpoint"].includes(x.status)).length} errors; unmerged, unverified or locked tasks are retained.`);
+    for (const row of results.filter(x=>x.status==="not-verified")) {
+      const why = row.reason === "head-changed"
+        ? "PR head 与任务提交不一致（分支在任务后又被推送过），保留 worktree 待人工核实"
+        : "PR 未合并或目标分支不符";
+      console.log(`  #${row.issue} 未核实：${why}`);
+    }
+    if(results.some(x=>["error","invalid-checkpoint"].includes(x.status))) process.exitCode=1; break; }
   case "doctor": await doctor(); break;
   case "status": {
     const snapshot = await localProgress(ROOT, id => readCheckpoint(id, undefined, local));
@@ -280,7 +289,12 @@ switch (command) {
     for (let round = 0; round < p.maxRoundsPerInvocation; round++) {
       console.log(`SOXU loop round ${round + 1}/${p.maxRoundsPerInvocation}`);
       const available = await issues();
-      if (!available.length) { console.log("No more ready issues"); if (!local && !dryRun) await processAuthorizedReleases(p); break; }
+      if (!available.length) {
+        console.log("No more ready issues");
+        // 队列空了也要收尾：本轮 PR 可能刚被 auto-merge 合并，需要关 Issue、清 worktree。
+        if (!local && !dryRun) { await cleanup(); await processAuthorizedReleases(p); }
+        break;
+      }
       const results = await once();
       if (problematic(results)) { process.exitCode = 1; console.log("Task paused/blocked; manual resume required. Stop to avoid wasting quota."); break; }
       if (!local && !dryRun) {await cleanup();await processAuthorizedReleases(p);}
