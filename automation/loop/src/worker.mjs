@@ -167,6 +167,19 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
     state.status = "running";
     await writeCheckpoint(state);
     reportTaskPhase(issue.number, state.phase);
+    if (resume && !state.modelAssignments && !["worktree","install"].includes(state.phase))
+      console.warn("Legacy checkpoint has no saved model assignment; the prior model is unknown. The next model request will use the current explicit configuration and be pinned.");
+    // A manual stop is the user's signal to adopt the current model settings on the next
+    // start. Failure pauses (quota/network/timeout) keep their pinned models so retries
+    // and cost stay predictable.
+    if (releasePinnedModelsAfterManualStop(state)) {
+      await writeCheckpoint(state);
+      console.log("Manual stop detected; the resumed run will use the current model settings.");
+    }
+    // 模型必须先固定：下面的执行态注释要写模型信息。放在 worktree 之后再取值会踩
+    // TDZ（Cannot access 'roleModels' before initialization），任务在 worktree 阶段直接 blocked。
+    const roleModels = await pinTaskModels(state,issue.number,
+      index => loadRoleModels(process.env,{index}), value => writeCheckpoint(value));
     // 状态互斥：进入执行态时清掉 ready/waiting/paused/blocked/pr 等其它状态，并说明原因。
     if (!local) await setTaskState(issue.number, "agent:in-progress",
       "SOXU " + (resume ? "恢复执行" : "开始执行") + " #" + issue.number + "（阶段 " + state.phase + "，模型 " +
@@ -178,17 +191,6 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
     if (state.phase === "worktree") state.phase = "install";
     await writeCheckpoint(state);
     reportTaskPhase(issue.number, state.phase);
-    if (resume && !state.modelAssignments && !["worktree","install"].includes(state.phase))
-      console.warn("Legacy checkpoint has no saved model assignment; the prior model is unknown. The next model request will use the current explicit configuration and be pinned.");
-    // A manual stop is the user's signal to adopt the current model settings on the next
-    // start. Failure pauses (quota/network/timeout) keep their pinned models so retries
-    // and cost stay predictable.
-    if (releasePinnedModelsAfterManualStop(state)) {
-      await writeCheckpoint(state);
-      console.log("Manual stop detected; the resumed run will use the current model settings.");
-    }
-    const roleModels = await pinTaskModels(state,issue.number,
-      index => loadRoleModels(process.env,{index}), value => writeCheckpoint(value));
     const mainDocs = await readFile(join(ROOT, "AGENTS.md"), "utf8");
     const devRole = await readFile(join(ROOT, "agents/roles/developer.md"), "utf8");
     const reviewRole = await readFile(join(ROOT, "agents/roles/reviewer.md"), "utf8");
@@ -240,6 +242,9 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
           const developerActivity = createPiActivityReporter(issue.number, "developer");
           let dev;
           try { dev = await runPi({ cwd: wt.directory, timeouts: policy.timeouts, modelSelection: roleModels.developer, onEvent: developerActivity.onEvent,
+        // 延时申请：慢命令（cargo test/build 等）由白名单判定，命中才抬高 idle 预算。
+        idleExtensionSeconds: policy.timeouts?.idleExtensionSeconds,
+        slowCommandPrefixes: policy.idleSlowCommands,
             prompt: promptFor("Developer", mainDocs + "\n" + devRole, issue,
               state.mergeConflict ? [
                 "MANDATORY MAIN INTEGRATION: Git HEAD has been safely fast-forwarded to latest origin/main.",
@@ -292,6 +297,9 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
           const reviewerActivity = createPiActivityReporter(issue.number, "reviewer");
           let review;
           try { review = await runPi({ cwd: wt.directory, timeouts: { ...policy.timeouts, piHardMinutes: policy.timeouts.reviewHardMinutes }, modelSelection: roleModels.reviewer, onEvent: reviewerActivity.onEvent,
+            // 延时申请：慢命令（cargo test/build 等）由白名单判定，命中才抬高 idle 预算。
+            idleExtensionSeconds: policy.timeouts?.idleExtensionSeconds,
+            slowCommandPrefixes: policy.idleSlowCommands,
             prompt: `${reviewRole}\n\n${mainDocs}\n\nReview the staged diff versus HEAD for Issue #${issue.number}: ${issue.title}. Do not edit files.${state.lastReview ? "\n\nPREVIOUS REVIEW FINDINGS (unresolved until proven otherwise; verify each one against the current tree):\n" + state.lastReview + "\nRequirement: your SOXU_REVIEW_RESULT must include a findings array, one entry per item above, each {\"item\": \"...\", \"status\": \"resolved\" or \"unresolved\", \"evidence\": \"...\"}. Approving while any item is missing or unresolved is not allowed." : ""}\nUse git diff --cached to read the implementation.\nReturn only the required SOXU_REVIEW_RESULT JSON marker on its own final line.`, signal }); reviewerActivity.finish(true); }
           catch (error) { reviewerActivity.finish(false); throw error; }
           await inspectChanges(wt.directory, state.base, policy);

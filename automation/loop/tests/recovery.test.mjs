@@ -34,7 +34,7 @@ test("durable checkpoints preserve exact phase, and discover paused or interrupt
 });
 
 test("startup, idle and hard deadline budgets are separated", () => {
-  assert.deepEqual(resolvePiTimeouts({timeouts:{piStartupSeconds:90,piIdleSeconds:240,piHardMinutes:35,shutdownGraceSeconds:5}}), {startupMs:90000,idleMs:240000,hardMs:2100000,graceMs:5000});
+  assert.deepEqual(resolvePiTimeouts({timeouts:{piStartupSeconds:90,piIdleSeconds:240,piHardMinutes:35,shutdownGraceSeconds:5}}), {startupMs:90000,baseIdleMs:240000,hardMs:2100000,graceMs:5000});
   assert.equal(resolvePiTimeouts({timeoutMs:1500}).hardMs,1500);
   assert.throws(() => resolvePiTimeouts({timeoutMs:-1}));
 });

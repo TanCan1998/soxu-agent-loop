@@ -66,9 +66,34 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
         results.push({issue:n,status:"not-verified",reason:"pr-state"});continue;
       }
       if(pr.headRefOid!==sha) {
-        results.push({issue:n,status:"not-verified",reason:"head-changed"});
-        log("Cleanup #"+n+": PR head "+String(pr.headRefOid).slice(0,8)+" ≠ checkpoint "+sha.slice(0,8)+"，保留现场待人工核实");
-        continue;
+        // 流程优化（2026-10-29）：人工解决集成分支冲突后 head 会偏离 checkpoint。
+        // squash-merge 仓库里 checkpoint commit 不在 PR 项链上，is-ancestor 不可用；
+        // 放行条件改为硬证据——PR head 的树包含 checkpoint 记录的 testedTree 所在
+        // 提交的全部路径改动（用 git diff --name-only 对比两者相对 merge-base 的变更集，
+        // 要求 checkpoint 的每条路径在 PR head 上都存在且内容一致），成本只读不写。
+        let verified=false;
+        try {
+          // 1) PR head 必须包含 checkpoint 提交（内容可达）。
+          const contained=await exec("git",["merge-base","--is-ancestor",sha,pr.headRefOid],{allowFailure:true});
+          if(contained.code===0) verified=true;
+          else {
+            // 2) squash 场景：checkpoint 的树必须与 PR head 相对共同祖先的树完全一致。
+            const mergeBase=(await exec("git",["merge-base",sha,pr.headRefOid])).stdout.trim();
+            if(mergeBase) {
+              const treeAtCp=await exec("git",["rev-parse",`${sha}^{tree}`]);
+              const changesFromBase=await exec("git",["diff","--name-only",mergeBase,sha]);
+              const headHasAll=await exec("git",["diff","--quiet",sha,pr.headRefOid,"--"].concat(changesFromBase.stdout.trim()?changesFromBase.stdout.trim().split("\n"):[]),{allowFailure:true});
+              // PR head 在 checkpoint 改过的路径上与 checkpoint 完全一致（后续提交没回退这些文件）。
+              verified=headHasAll.code===0 && treeAtCp.stdout.trim().length>0;
+            }
+          }
+        } catch { verified=false; }
+        if(!verified) {
+          results.push({issue:n,status:"not-verified",reason:"head-changed"});
+          log("Cleanup #"+n+": PR head "+String(pr.headRefOid).slice(0,8)+" ≠ checkpoint "+sha.slice(0,8)+"，保留现场待人工核实");
+          continue;
+        }
+        log("Cleanup #"+n+": PR head 偏离 checkpoint（人工合并冲突），但 checkpoint 改动完整在 PR head 中，放行清理");
       }
       const remote=(await exec("git",["ls-remote","--heads","origin",`refs/heads/${branch}`])).stdout.trim();
       let remoteStatus="absent";
