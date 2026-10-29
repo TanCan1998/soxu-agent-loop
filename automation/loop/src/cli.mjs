@@ -115,7 +115,10 @@ async function issues() {
     if (waiting.length) console.log(`Local prerequisites pending integration into main: ${waiting.map(t => `${t.id} <- ${t.missing.join(',')}`).join('; ')}`);
     return ready;
   }
-  return listIssues({ promote: !dryRun });
+  // 必须传集成分支：listIssues 的 base 默认是 "main"，而 SOXU 用 dev 作集成分支。
+  // 不传的话 mergedIssueNumbers(prs, "main") 永远查不到合并到 dev 的 PR，
+  // 依赖转换（waiting → ready）会全部失效（2026-10-29 实测）。
+  return listIssues({ promote: !dryRun, base: await integrationBase() });
 }
 async function doctor() {
   console.log("SOXU Agent Loop doctor\nProject:", ROOT);
