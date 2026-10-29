@@ -115,6 +115,14 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 let restartedFor = null;
 async function watchToolCommit() {
   if (relaunching || !bootCommit || coordinator.applyingUpdate) return;
+  // 有任务在跑时绝不重启：重启会带走 runner（Windows 上 fork 的子进程没有独立进程组），
+  // 任务会被打断、checkpoint 停在半路（#36 就是这样被中断的）。
+  // 等任务结束后下一轮 tick 自然补上重启。
+  if (coordinator.active || coordinator.attached) {
+    if (restartedFor !== "deferred") console.log("Tool checkout changed, but a runner is active; restart deferred until it finishes.");
+    restartedFor = "deferred";
+    return;
+  }
   const current = await toolCommit();
   if (!current || current === bootCommit || current === restartedFor) return;
   restartedFor = current;
