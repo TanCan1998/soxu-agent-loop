@@ -17,6 +17,7 @@ import { writeRunnerState, recordRunnerExitSync, runnerLogPath } from "./runner-
 import { teeStdioToFile } from "./runner-log.mjs";
 import { checkUpdate, applyUpdate } from "./update.mjs";
 import { partitionRecoveryCandidates } from "./blocked-recovery.mjs";
+import { safeFailureMessage } from "./errors.mjs";
 
 // Register before any command runs: `start` is awaited at top level, so a hook at the
 // bottom of the file would only run after the task finished and be useless for reattach.
@@ -286,6 +287,16 @@ switch (command) {
   case "loop": {
     if (!dryRun) await verifyLockfiles();
     if (!local && !dryRun) await cleanup();
+    // 被中断的任务是 agent:paused，不在 ready 队列里；不先恢复的话，
+    // 面板上的「运行」永远推不动它们（历史缺陷：面板显示运行中，实际全卡 paused）。
+    if (!dryRun) {
+      const interrupted = (await listPaused(undefined, { includeBlocked: false })).filter(s => local ? s.local : !s.local);
+      if (interrupted.length) {
+        console.log("Resuming " + interrupted.length + " interrupted task(s) before the loop");
+        await recover();
+        if (controller.signal.aborted) break;
+      }
+    }
     for (let round = 0; round < p.maxRoundsPerInvocation; round++) {
       console.log(`SOXU loop round ${round + 1}/${p.maxRoundsPerInvocation}`);
       const available = await issues();
@@ -296,10 +307,15 @@ switch (command) {
         break;
       }
       const results = await once();
+      // 收尾必须在本轮任何分支之前执行：历史缺陷是 problematic 分支直接 break，
+      // 跳过 cleanup，导致已合并的 issue 一直挂着 agent:pr 永不关闭。
+      if (!local && !dryRun) await cleanup();
       if (problematic(results)) { process.exitCode = 1; console.log("Task paused/blocked; manual resume required. Stop to avoid wasting quota."); break; }
-      if (!local && !dryRun) {await cleanup();await processAuthorizedReleases(p);}
+      if (!local && !dryRun) await processAuthorizedReleases(p);
       if (dryRun) break;
     }
+    // 兜底：循环因中断/异常退出时再收一次，保证已完成任务的 issue/worktree 不残留。
+    if (!local && !dryRun) { try { await cleanup(); } catch (error) { console.warn("cleanup after loop failed: " + safeFailureMessage(error, 200)); } }
     break;
   }
   default: throw new Error(`Unknown command '${command}', expected doctor|status|models|seed-issues|start|loop|watch|say|update`);
