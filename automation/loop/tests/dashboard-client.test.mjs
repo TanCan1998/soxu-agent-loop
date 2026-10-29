@@ -672,7 +672,9 @@ test("milestone detail distinguishes all six task states", async () => {
     .filter(row => row.className === "milestone-detail-row")
     .map(row => row.children[1]);
   assert.deepEqual(chips.map(chip => chip.dataset.state), ["merged","unverified","blocked","paused","running","pending"]);
-  assert.deepEqual(chips.map(chip => chip.textContent), ["✓ 已合入","⏳ 已关闭 · 合并待核实","⛔ 已阻塞","⏸ 已暂停","▶ 进行中","○ 待处理"]);
+  // 文案在 2026-10-29 调整为「未找到合入记录」：原「合并待核实」容易被读成「正在审核」，
+  // 真实含义是 issue 已关闭但找不到合并进集成分支的 PR 证据。
+  assert.deepEqual(chips.map(chip => chip.textContent), ["✓ 已合入","⏳ 已关闭 · 未找到合入记录","⛔ 已阻塞","⏸ 已暂停","▶ 进行中","○ 待处理"]);
   // Six distinct colours are declared in the stylesheet for these keys.
   const css = await readFile(new URL("../web/style.css", import.meta.url), "utf8");
   for (const state of ["merged","unverified","blocked","paused","running","pending"]) {

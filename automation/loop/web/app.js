@@ -533,8 +533,10 @@ function renderAgents() {
     const item = element("article", undefined, "agent-card");
     const role = activity.role === "developer" ? "Developer" : "Reviewer";
     const state = activityLabels[activity.state] || "未知";
-    item.append(element("strong", "#" + activity.taskId + " · " + role),
-      element("span", state + (activity.tool ? " · " + activity.tool : ""), "agent-state"));
+    // 状态用颜色 + 小圆点区分，不再统一蓝色
+    const stateNode = element("span", state + (activity.tool ? " · " + activity.tool : ""), "agent-state");
+    stateNode.dataset.state = activity.state;
+    item.append(element("strong", "#" + activity.taskId + " · " + role), stateNode);
     const elapsed = element("span", "", "agent-elapsed");
     elapsed.dataset.startedAt = activity.startedAt;
     elapsed.dataset.activitySince = activity.activitySince;
@@ -595,7 +597,7 @@ function showMilestoneDetail(id, name, stage, limited, source) {
     if(item.url) { label.href=item.url; label.target="_blank"; label.rel="noopener noreferrer"; }
     // Six distinct states: colour alone is not enough, so every chip carries an icon.
     const state = item.merged ? { key:"merged", label:"已合入", icon:"✓" }
-      : item.state === "CLOSED" ? { key:"unverified", label:"已关闭 · 合并待核实", icon:"⏳" }
+      : item.state === "CLOSED" ? { key:"unverified", label:"已关闭 · 未找到合入记录", icon:"⏳" }
       : item.labels.includes("agent:blocked") ? { key:"blocked", label:"已阻塞", icon:"⛔" }
       : item.labels.includes("agent:paused") ? { key:"paused", label:"已暂停", icon:"⏸" }
       : item.labels.includes("agent:in-progress") ? { key:"running", label:"进行中", icon:"▶" }
@@ -1021,9 +1023,11 @@ function draftRow(d) {
   // 除"结果待核实/提交中"外都能排序；拖动走 Pointer 事件，触摸屏同样可用。
   row.dataset.draggable = ["unknown", "submitting"].includes(d.status) ? "0" : "1";
   if (row.dataset.draggable === "1") {
-    const handle = element("span", "⠿", "drag-handle");
+    // 字符 ⠿ 在很多系统字体里渲染得又小又虚，改用内联 SVG 六点手柄
+    const handle = element("span", "", "drag-handle");
     handle.setAttribute("data-drag-handle", "");
     handle.setAttribute("aria-hidden", "true");
+    handle.innerHTML = '<svg viewBox="0 0 10 16" width="10" height="16" aria-hidden="true"><circle cx="3" cy="3" r="1.4"/><circle cx="7" cy="3" r="1.4"/><circle cx="3" cy="8" r="1.4"/><circle cx="7" cy="8" r="1.4"/><circle cx="3" cy="13" r="1.4"/><circle cx="7" cy="13" r="1.4"/></svg>';
     row.append(handle);
   }
   const label=element("label"), box=element("input");box.type="checkbox";box.checked=selectedDrafts.has(d.id);box.disabled=d.status!=="review" || !Array.isArray(d.answers) || draftState.busy;box.addEventListener("change",()=>{if(box.checked)selectedDrafts.add(d.id);else selectedDrafts.delete(d.id);});label.append(box,document.createTextNode(" "+(d.assessment?.title || d.requirement.slice(0,60))+" · "+({draft:"草稿",review:d.answers?"可提交":"待确认",assessing:"评估中",submitting:"提交中",submitted:"已提交",unknown:"结果待核实"}[d.status]||d.status)));row.append(label);
@@ -1072,13 +1076,15 @@ function renderQueue() {
       const handle = element("span", undefined, "drag-handle");
       handle.setAttribute("data-drag-handle", "");
       handle.setAttribute("aria-hidden", "true");
+      // 与草稿行一致：用内联 SVG 六点手柄，字符 ⠿ 在多数系统字体下太虚
+      handle.innerHTML = '<svg viewBox="0 0 10 16" width="10" height="16" aria-hidden="true"><circle cx="3" cy="3" r="1.4"/><circle cx="7" cy="3" r="1.4"/><circle cx="3" cy="8" r="1.4"/><circle cx="7" cy="8" r="1.4"/><circle cx="3" cy="13" r="1.4"/><circle cx="7" cy="13" r="1.4"/></svg>';
       row.append(handle);
     }
     const title=element(item.url ? "a" : "span",`#${item.number} ${item.title}`,"pr-link");
     if (item.url && /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/.test(item.url)) {title.href=item.url;title.target="_blank";title.rel="noopener noreferrer";}
     const checkpoint=item.checkpoint;
     const live=(data.taskPhases || []).find(t=>t.taskId===item.number);
-    const state=item.state === "CLOSED" ? (item.merged ? "已关闭 · PR 已合并" : "已关闭 · 合并状态待核实") : live?.status === "running" ? "执行中 · "+live.phase : checkpoint?.status === "paused" ? "已暂停 · "+(checkpoint.phase ?? "") : checkpoint?.status === "blocked" ? "已阻塞 · "+(checkpoint.phase ?? "") : "等待执行";
+    const state=item.state === "CLOSED" ? (item.merged ? "已关闭 · PR 已合并" : "已关闭 · 未找到合入记录") : live?.status === "running" ? "执行中 · "+live.phase : checkpoint?.status === "paused" ? "已暂停 · "+(checkpoint.phase ?? "") : checkpoint?.status === "blocked" ? "已阻塞 · "+(checkpoint.phase ?? "") : "等待执行";
     row.append(title,element("span",state,"queue-state"));
     // 已创建需求也能直接切换 ready（打标签前服务端会做依赖校验）
     if (item.state === "OPEN") {
