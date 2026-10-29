@@ -89,12 +89,18 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
             const actualRel=relative(realParent,realExpected), expectedRel=relative(managed,expected);
             const same=process.platform==="win32" ? actualRel.toLowerCase()===expectedRel.toLowerCase() : actualRel===expectedRel;
             if(!st.isDirectory() || st.isSymbolicLink() || !parent.isDirectory() || parent.isSymbolicLink() || !same) throw Error("unsafe-worktree-path");
+            // ignored 文件分两类：构建产物（可删）与用户数据（如 .env，必须保留）。
+            // 用路径白名单区分，只允许删除已知的可再生产物；
+            // 白名单外的 ignored 内容一律判 dirty 并保留现场。
             const statusRaw=(await exec("git",["status","--porcelain=v1","-z","--untracked-files=normal","--ignored=matching"],{cwd:expected})).stdout;
             if(statusRaw.length>=990000) throw Error("worktree-status-too-large");
             const status=statusRaw.split("\0").filter(Boolean);
-            const unsafe=status.some(x=>!/^!! (?:[^/]+\/)*(?:node_modules|target|dist)\/$/.test(x));
+            // Tauri 项目会生成 src-tauri/gen、src-tauri/icons 等目录，之前只白名单了
+            // node_modules/target/dist，导致任务完成后 worktree 永远删不掉（#38）。
+            const SAFE_IGNORED=/^!! (?:[^/]+\/)*(?:node_modules|target|dist|gen|icons|coverage|out|build|\.turbo|\.next|\.cache)\/$/;
+            const unsafe=status.some(x=>!SAFE_IGNORED.test(x));
             if(unsafe) localStatus="dirty";
-            else {await exec("git",["worktree","remove",expected]);localStatus="removed";}
+            else {await exec("git",["worktree","remove","--force",expected]);localStatus="removed";}
           }
           if(!holders.length || localStatus==="removed") {await exec("git",["update-ref","-d",`refs/heads/${branch}`,sha]);localStatus="deleted";}
         }
