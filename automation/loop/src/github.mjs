@@ -9,7 +9,22 @@ import { loadTaskCatalog, taskIdFromIssueTitle } from "./task-catalog.mjs";
 import { planGithubQueue, mergedIssueNumbers, waitingLabelDowngrades } from "./github-queue.mjs";
 import { readQueueOrder } from "./queue-order.mjs";
 
-const LABELS = ["agent:ready", "agent:waiting", "agent:in-progress", "agent:blocked", "agent:paused", "agent:pr", "agent:release"];
+/**
+ * 任务状态标签的唯一来源：名称、颜色、描述。
+ * 描述会写进 GitHub 的标签定义，界面上鼠标悬停即可看到语义。
+ */
+export const LABEL_META = Object.freeze({
+  "agent:ready":       { color: "287a61", description: "就绪：依赖已满足，等待 agent 认领" },
+  "agent:waiting":     { color: "c2e0c6", description: "等待前置任务：依赖合并后自动转 ready" },
+  "agent:in-progress": { color: "1d76db", description: "执行中：agent 正在开发 / 检查 / 评审" },
+  "agent:paused":      { color: "d4c5f9", description: "已暂停：可恢复，需人工检查后手动恢复" },
+  "agent:blocked":     { color: "b60205", description: "已阻塞：评审或检查连续失败，需人工介入" },
+  "agent:pr":          { color: "0e8a16", description: "已交付：PR 已创建，等待合并与收尾" },
+  "agent:release":     { color: "fbca04", description: "发布标记：由发布流程处理" },
+});
+const LABELS = Object.keys(LABEL_META);
+/** 互斥的状态标签：同一时刻只应存在一个。 */
+const STATE_LABELS = ["agent:ready", "agent:waiting", "agent:in-progress", "agent:paused", "agent:blocked", "agent:pr"];
 export async function listIssues({promote = false, base = "main"} = {}) {
   // Both open and closed TASK issues are needed; a PR being created is NOT a merged dependency.
   const text = await gh(["issue", "list", "--state", "all", "--limit", "1000", "--json", "number,title,body,labels,state"], ROOT);
@@ -25,17 +40,46 @@ export async function listIssues({promote = false, base = "main"} = {}) {
   if (promote) {
     // A previously seeded v1.5 ready task may not have had dependency metadata honored.
     for (const issue of waitingLabelDowngrades(values, catalog, ready)) {
-      await labelIssue(issue.number, "agent:waiting", "agent:ready");
+      await labelIssue(issue.number, "agent:waiting", "agent:ready",
+        "依赖已合入集成分支，SOXU 自动把 #" + issue.number + " 从 agent:ready 改回 agent:waiting 等待重新排期。");
     }
     for (const issue of ready) if (issue.promote) {
-      await labelIssue(issue.number, "agent:ready", "agent:waiting");
+      await labelIssue(issue.number, "agent:ready", "agent:waiting",
+        "前置任务已全部合入集成分支，SOXU 自动把 #" + issue.number + " 从 agent:waiting 提升为 agent:ready，等待认领。");
     }
   }
   return ready;
 }
-export async function labelIssue(n, add, remove) {
-  if (add) await gh(["issue", "edit", String(n), "--add-label", add], ROOT);
-  if (remove) await gh(["issue", "edit", String(n), "--remove-label", remove], ROOT);
+/**
+ * 低层标签变更：一次 gh 调用同时增删，并在变更后写一条说明。
+ * note 为空时只改标签（用于批量升降级等不需要逐条解释的场景）。
+ */
+export async function labelIssue(n, add, remove, note = null) {
+  const args = ["issue", "edit", String(n)];
+  if (add) args.push("--add-label", add);
+  if (remove) args.push("--remove-label", remove);
+  if (args.length > 3) await gh(args, ROOT);
+  if (note) await commentIssue(n, note);
+}
+
+/**
+ * 设置任务状态（互斥）：加上目标标签，并清掉其它所有状态标签。
+ * 之前的实现只删「当前这一步以为的那个标签」，任一环节失败就会留下
+ * agent:in-progress + agent:pr 这类矛盾组合（#39 就是这样）；
+ * 这里改为先读真实标签再计算差集，保证同一时刻只有一个状态。
+ */
+export async function setTaskState(n, state, note = null) {
+  if (!STATE_LABELS.includes(state)) throw new Error("unsupported task state: " + state);
+  const view = JSON.parse(await gh(["issue", "view", String(n), "--json", "labels"], ROOT));
+  const current = new Set((view.labels ?? []).map(x => x.name));
+  const args = ["issue", "edit", String(n)];
+  if (!current.has(state)) args.push("--add-label", state);
+  for (const name of STATE_LABELS) {
+    if (name !== state && current.has(name)) args.push("--remove-label", name);
+  }
+  if (args.length > 3) await gh(args, ROOT);
+  if (note) await commentIssue(n, note);
+  return { added: current.has(state) ? null : state, removed: STATE_LABELS.filter(x => x !== state && current.has(x)) };
 }
 export async function commentIssue(n, message) {
   const dir = await mkdtemp(join(tmpdir(), "soxu-"));
@@ -65,7 +109,10 @@ export async function branchProtectionEnabled(branch = "main") {
 }
 export async function autoMerge(prUrl) { await gh(["pr", "merge", prUrl, "--auto", "--squash"], ROOT); }
 export async function seedIssues() {
-  for (const name of LABELS) await gh(["label", "create", name, "--color", name === "agent:blocked" ? "b60205" : "287a61", "--force"], ROOT);
+  // 标签定义带描述：GitHub 界面上悬停即可看到语义，避免只有名字没有含义。
+  for (const [name, meta] of Object.entries(LABEL_META)) {
+    await gh(["label", "create", name, "--color", meta.color, "--description", meta.description, "--force"], ROOT);
+  }
   const existing = JSON.parse(await gh(["issue", "list", "--state", "all", "--limit", "300", "--json", "title"], ROOT));
   const tasks = await loadTaskCatalog();
   for (const task of tasks) {

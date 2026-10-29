@@ -5,7 +5,7 @@ import { git, run } from "./process.mjs";
 import { runPi, parseReview } from "./rpc.mjs";
 import { createPiActivityReporter } from "./dashboard-activity.mjs";
 import { slug, inspectChanges } from "./guards.mjs";
-import { labelIssue, commentIssue, createPr, branchProtectionEnabled, autoMerge } from "./github.mjs";
+import { labelIssue, commentIssue, createPr, branchProtectionEnabled, autoMerge, setTaskState } from "./github.mjs";
 import { readCheckpoint, writeCheckpoint } from "./checkpoint.mjs";
 import { nextPhaseForTree, assertRecoveredCommit } from "./review-invariants.mjs";
 import { loadRoleModels, modelArgs } from "./agent-models.mjs";
@@ -167,7 +167,10 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
     state.status = "running";
     await writeCheckpoint(state);
     reportTaskPhase(issue.number, state.phase);
-    if (!local) await labelIssue(issue.number, "agent:in-progress", resume ? (oldStatus === "paused" ? "agent:paused" : oldStatus === "blocked" ? "agent:blocked" : null) : "agent:ready");
+    // 状态互斥：进入执行态时清掉 ready/waiting/paused/blocked/pr 等其它状态，并说明原因。
+    if (!local) await setTaskState(issue.number, "agent:in-progress",
+      "SOXU " + (resume ? "恢复执行" : "开始执行") + " #" + issue.number + "（阶段 " + state.phase + "，模型 " +
+      (roleModels.developer.provider ?? "Pi default") + "/" + (roleModels.developer.model ?? "inherited") + "）。");
     const base = await integrationBase();
     const wt = await worktreeFor(issue, local, state, base);
     state.branch = wt.branch; state.directory = wt.directory;
@@ -343,8 +346,10 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
           await checkpoint("merge"); break;
         }
         case "merge":
-          await commentIssue(issue.number, `Agent produced a reviewed PR: ${state.pr}`);
-          await labelIssue(issue.number, "agent:pr", "agent:in-progress");
+          // 一次调用完成状态切换并附说明：PR 链接、目标分支、是否已请求自动合并。
+          await setTaskState(issue.number, "agent:pr",
+            "SOXU 已完成开发与评审，PR 已创建：" + state.pr + "（目标分支 " + base + "）。" +
+            (policy.autoMerge ? "已请求自动合并，等待必需检查通过后由 GitHub 合并。" : "自动合并已关闭，需人工合并。"));
           if (policy.autoMerge) {
             try {
               if (await branchProtectionEnabled(base)) {
@@ -386,8 +391,11 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
     console.error(`issue #${issue.number} ${paused ? "paused" : "blocked"} at ${state?.phase ?? "startup"}: ${safeFailureMessage(failure, 9000)}`);
     if (!local && failure.kind !== "network") {
       try {
-        await labelIssue(issue.number, paused ? "agent:paused" : "agent:blocked", "agent:in-progress");
-        await commentIssue(issue.number, `SOXU ${paused ? "paused (recoverable)" : "blocked"} at phase ${state?.phase ?? "startup"}; worktree kept. Reason: ${failure.kind}.\n\n${safeFailureMessage(failure)}\n\nManual recovery: ${paused ? "pnpm agent:resume" : "pnpm agent:resume -- --blocked"}`);
+        // 状态切换与说明合并为一次调用，避免"标签改了但没解释"或中途失败留下混合状态。
+        await setTaskState(issue.number, paused ? "agent:paused" : "agent:blocked",
+          "SOXU " + (paused ? "已暂停（可恢复）" : "已阻塞") + "，阶段 " + (state?.phase ?? "startup") +
+          "；worktree 与检查点已保留。原因：" + failure.kind + "。\n\n" + safeFailureMessage(failure) +
+          "\n\n人工恢复：pnpm agent:start（" + (paused ? "暂停" : "阻塞") + "任务会被优先重试）");
       } catch (e) { console.error(`Unable to update Issue (local checkpoint is authoritative for recovery): ${safeFailureMessage(e)}`); }
     }
     if (!paused) {
