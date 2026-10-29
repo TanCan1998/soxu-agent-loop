@@ -538,6 +538,8 @@ function renderAgents() {
     const elapsed = element("span", "", "agent-elapsed");
     elapsed.dataset.startedAt = activity.startedAt;
     elapsed.dataset.activitySince = activity.activitySince;
+    // 已结束的 Agent 必须冻结耗时：否则 completed/failed 之后计时会一直涨。
+    elapsed.dataset.state = activity.state;
     item.append(elapsed);
     const selected=actualModels.get(activity.taskId+":"+activity.role);
     if (selected) item.append(element("span", "模型："+(selected.provider && selected.model ? selected.provider+" / "+selected.model : "Pi 默认（具体模型未知）"),"agent-model"));
@@ -547,15 +549,29 @@ function renderAgents() {
   updateElapsed();
 }
 function updateElapsed() {
-  const fmt = timestamp => {
-    const seconds = Math.max(0, Math.floor((Date.now() - Date.parse(timestamp)) / 1000));
-    if (!Number.isFinite(seconds)) return "—";
-    return Math.floor(seconds / 3600).toString().padStart(2,"0") + ":" +
-      Math.floor(seconds % 3600 / 60).toString().padStart(2,"0") + ":" +
-      (seconds % 60).toString().padStart(2,"0");
+  const pad = value => String(value).padStart(2, "0");
+  const hms = seconds => Number.isFinite(seconds)
+    ? pad(Math.floor(seconds / 3600)) + ":" + pad(Math.floor(seconds % 3600 / 60)) + ":" + pad(seconds % 60)
+    : "—";
+  const clock = timestamp => {
+    const value = Date.parse(timestamp);
+    return Number.isFinite(value) ? new Date(value).toLocaleTimeString("zh-CN", { hour12: false }) : "—";
   };
-  for (const label of document.querySelectorAll(".agent-elapsed"))
-    label.textContent = "运行 " + fmt(label.dataset.startedAt) + " · 当前状态 " + fmt(label.dataset.activitySince);
+  for (const label of document.querySelectorAll(".agent-elapsed")) {
+    const started = Date.parse(label.dataset.startedAt);
+    const since = Date.parse(label.dataset.activitySince);
+    // 只有仍在跑的状态才需要实时累加；completed/failed 用最后一次活动时间当结束点。
+    const finished = label.dataset.state === "completed" || label.dataset.state === "failed";
+    if (!Number.isFinite(started)) { label.textContent = "耗时未知"; continue; }
+    const end = finished && Number.isFinite(since) ? since : Date.now();
+    const total = hms(Math.max(0, Math.floor((end - started) / 1000)));
+    if (finished) {
+      label.textContent = "耗时 " + total + " · 结束于 " + clock(label.dataset.activitySince);
+    } else {
+      const idle = hms(Number.isFinite(since) ? Math.max(0, Math.floor((Date.now() - since) / 1000)) : NaN);
+      label.textContent = "运行 " + total + " · 距上次活动 " + idle;
+    }
+  }
 }
 function showMilestoneDetail(id, name, stage, limited, source) {
   $("milestoneTitle").textContent = id + " · " + name;
