@@ -716,3 +716,8 @@ body.dragging-draft .queue-item{cursor:grabbing}
   pointer-events: none;
 }
 
+
+/* 新增展示态配色：已合入待归档、已归档 */
+.task-state[data-state=completed] { color: #78d0ac; }
+.task-state[data-state=archived] { color: var(--muted); }
+

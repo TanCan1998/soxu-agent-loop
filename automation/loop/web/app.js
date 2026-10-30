@@ -8,11 +8,15 @@ const THEME_KEY = "soxu.dashboard.theme.v1";
 const FOLLOW_KEY = "soxu.dashboard.followLogs.v1";
 const LOG_LIMITS = new Set([20, 50, 100, 200]);
 const preferenceStorage = typeof localStorage === "undefined" ? { getItem: () => null, setItem: () => {} } : localStorage;
-const stateLabels = { running: "进行中", paused: "已暂停", blocked: "已阻塞", pending: "等待", done: "本地已结束" };
+const stateLabels = {
+  running: "进行中", paused: "已暂停", blocked: "已阻塞", pending: "等待", done: "本地已结束",
+  // 以下两项不是 task.status 的取值，而是由远端状态推导出的展示态
+  completed: "已合入 · 待归档", archived: "已完成"
+};
 const phaseLabels = {
   worktree:"准备工作树", install:"安装依赖", develop:"开发", checks:"执行检查", review:"代码审查",
   postConflictInstall:"冲突后安装", recoveryInstall:"恢复时安装依赖", finalChecks:"最终检查", commit:"提交", push:"推送",
-  createPr:"创建 PR", merge:"等待合并", done:"完成"
+  createPr:"创建 PR", merge:"等待合并", done:"完成", archived:"已归档"
 };
 const activityLabels = { waiting:"等待模型", generating:"生成中", tool:"执行工具", completed:"已完成", failed:"失败" };
 let connected = false, requestInFlight = false;
@@ -484,10 +488,23 @@ function renderTasks(data) {
     // 按状态发光：运行中脉冲，暂停/阻塞橙色微光，已完成绿色微光（waiting 不加）。
   if (card.dataset.status !== "waiting") {const effect=element("div",undefined,"task-motion");effect.setAttribute("aria-hidden","true");card.append(effect);}
     card.append(element("div", "#" + task.id, "task-id"), element("div", task.title, "task-name"));
-    const status = element("div", stateLabels[task.status] || task.status, "task-state");
-    status.dataset.state = task.status;
+    // 状态文字必须和 card.dataset.status 同源。
+    // 过去文字只读 task.status（本地 state 文件），而卡片状态还看了远端 merged，
+    // 于是 PR 早已合并的任务会显示成「完成配色 + 等待两个字」。
+    let displayState = task.status;
+    if (task.phase === "archived") displayState = "archived";
+    else if (merged) displayState = "completed";
+    const status = element("div", stateLabels[displayState] || displayState, "task-state");
+    status.dataset.state = displayState;
+    // 时间带日期：只给时分秒的话，跨天的任务看不出是哪一天
+    const stamp = task.updatedAt ? new Date(task.updatedAt) : null;
+    // 手动拼 MM-DD HH:mm：zh-CN 的 toLocaleDateString 会给 10/28 这种斜杠格式
+    const pad = n => String(n).padStart(2, "0");
+    const timeText = stamp && !Number.isNaN(stamp.getTime())
+      ? pad(stamp.getMonth() + 1) + "-" + pad(stamp.getDate()) + " " + pad(stamp.getHours()) + ":" + pad(stamp.getMinutes())
+      : "—";
     card.append(status, element("div", phaseLabels[task.phase] || task.phase || "尚未开始", "task-stage"),
-      element("div", task.updatedAt ? new Date(task.updatedAt).toLocaleTimeString() : "—", "task-time"));
+      element("div", timeText, "task-time"));
     const taskId = "TASK-" + String(task.id).padStart(3,"0");
     const remote = data.github?.status === "ok" ? data.github.tasks?.[taskId] : null;
     const details = [];
