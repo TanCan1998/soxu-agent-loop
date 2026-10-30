@@ -35,13 +35,15 @@ test("doneTaskIds reads archived task ids", async () => {
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-function ghStub({ state = "OPEN", body = "dependencies: [TASK-099]", labels = [] } = {}) {
+function ghStub({ state = "OPEN", body = "dependencies: [TASK-099]", labels = [], issues = [], prs = [] } = {}) {
   const calls = [];
   const execute = async (bin, args) => {
     calls.push(bin + " " + args.join(" "));
     if (args[0] === "issue" && args[1] === "view") {
       return { stdout: JSON.stringify({ number: 42, title: "[M2] [ISSUE-42] 示例", body, labels: labels.map(name => ({ name })), state }) };
     }
+    if (args[0] === "issue" && args[1] === "list") return { stdout: JSON.stringify(issues) };
+    if (args[0] === "pr" && args[1] === "list") return { stdout: JSON.stringify(prs) };
     return { stdout: "" };
   };
   return { execute, calls };
@@ -96,6 +98,37 @@ test("setIssueReady does not re-add an existing ready label", async () => {
     const edit = calls.find(c => c.includes("issue edit"));
     assert.ok(!edit.includes("--add-label"), "already ready, no add");
     assert.ok(edit.includes("--remove-label agent:paused"), "still clears the conflicting state");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("doneTaskIds also accepts closed issues with a merged PR", async () => {
+  const root = await temp();
+  try {
+    // tasks/done 为空：模拟「已合并但还没归档」的窗口期
+    await mkdir(join(root, "tasks", "done"), { recursive: true });
+    const { execute } = ghStub({
+      body: "dependencies: [TASK-088]",
+      issues: [{ number: 88, title: "[M1] [TASK-088] 已合并待归档", state: "CLOSED" }],
+      prs: [{ body: "Closes #88" }],
+    });
+    const result = await setIssueReady(root, 42, true, { execute });
+    assert.equal(result.ok, true, "closed + merged counts as done even before archiving");
+    assert.deepEqual(result.missing, []);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("doneTaskIds still refuses a closed issue with no merge record", async () => {
+  const root = await temp();
+  try {
+    await mkdir(join(root, "tasks", "done"), { recursive: true });
+    const { execute } = ghStub({
+      body: "dependencies: [TASK-088]",
+      issues: [{ number: 88, title: "[M1] [TASK-088] 手动关闭", state: "CLOSED" }],
+      prs: [],
+    });
+    const result = await setIssueReady(root, 42, true, { execute });
+    assert.equal(result.ok, false, "closed without a merge record is not done");
+    assert.deepEqual(result.missing, ["TASK-088"]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

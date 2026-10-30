@@ -32,11 +32,35 @@ export async function writeQueueOrder(root, order) {
 }
 
 /** 已归档（tasks/done）的任务 id：视为前置依赖已满足。 */
-export async function doneTaskIds(root) {
+export async function doneTaskIds(root, { execute = null, wanted = null } = {}) {
+  let archived;
   try {
     const names = await readdir(join(root, "tasks", "done"));
-    return new Set(names.flatMap(n => n.match(/TASK-\d{3,}/g) ?? []));
+    archived = new Set(names.flatMap(n => n.match(/TASK-\d{3,}/g) ?? []));
   } catch { return null; }
+  // 只读目录会留下一个窗口期：任务已合并进集成分支、但 cleanup 还没把它从
+  // tasks/backlog 归档到 tasks/done（dashboard 每 60 秒跑一次），
+  // 这段时间里依赖它的需求会被误判为「依赖缺失」。
+  // 传入 execute 与 wanted 时，再补一份「已关闭且 PR 有合入记录」的来源。
+  if (!execute || !wanted?.length) return archived;
+  const pending = wanted.filter(id => !archived.has(id));
+  if (!pending.length) return archived;
+  try {
+    const issues = JSON.parse((await execute("gh", ["issue", "list", "--state", "all", "--limit", "1000", "--json", "number,title,state"], { cwd: root, timeoutMs: 30000 })).stdout);
+    const closed = [...issues].filter(i => i.state === "CLOSED");
+    if (!closed.length) return archived;
+    const prs = JSON.parse((await execute("gh", ["pr", "list", "--state", "merged", "--limit", "1000", "--json", "body"], { cwd: root, timeoutMs: 30000 })).stdout);
+    const merged = new Set();
+    const re = /(?:^|\n)\s*(?:closes|closed|close|fixes|fixed|fix|resolves|resolved|resolve)\s+#(\d+)\b/gim;
+    for (const pr of prs) for (const m of String(pr.body ?? "").matchAll(re)) merged.add(Number(m[1]));
+    for (const issue of closed) {
+      if (!merged.has(issue.number)) continue;
+      for (const id of String(issue.title ?? "").match(/TASK-\d{3,}/g) ?? []) {
+        if (pending.includes(id)) archived.add(id);
+      }
+    }
+  } catch { /* gh 失败时退回纯本地判断，不让「设就绪」整体失败 */ }
+  return archived;
 }
 
 /**
@@ -66,7 +90,7 @@ export async function setIssueReady(root, number, ready, { execute }) {
   if (view.state !== "OPEN") return { ok: false, number, ready: false, missing: [], reason: "issue-closed" };
   const { dependencyIds } = await import("./dashboard-intake.mjs");
   const required = dependencyIds(String(view.title ?? "") + "\n" + String(view.body ?? ""));
-  const done = await doneTaskIds(root);
+  const done = await doneTaskIds(root, { execute, wanted: required });
   if (!done) return { ok: false, number, ready: false, missing: required, reason: "tasks-done-unreadable" };
   const missing = required.filter(id => !done.has(id));
   if (missing.length) return { ok: false, number, ready: false, missing, reason: "dependencies-missing" };
