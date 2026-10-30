@@ -559,3 +559,40 @@ body.dragging-draft .queue-item{cursor:grabbing}
   .milestone-fill::after { animation: none; }
 }
 
+
+/* ── 进度条斜条纹：只在进行中的卡片显示，并用 transform 消除接缝 ──
+   1) 默认所有卡片不显示动画，只有 [data-status=running] 才铺条纹
+   2) 原实现用 background-position 位移，14.14px 的周期在像素取整后
+      会在右端留下一条错位的接缝；改用 transform: translateX 由合成器处理，
+      并把伪元素放大到 inset:-50% 避免边缘露出。 */
+.milestone-fill::after {
+  content: "";
+  position: absolute;
+  inset: -50%;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0 5px,
+    color-mix(in srgb, #fff 26%, transparent) 5px 10px
+  );
+  opacity: 0;
+  animation: none;
+  will-change: transform;
+}
+.milestone-card[data-status=running] .milestone-fill::after {
+  opacity: 1;
+  animation: milestone-stripes 1.1s linear infinite;
+}
+@keyframes milestone-stripes {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(-14.1421356237px, 0, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .milestone-fill::after { animation: none !important; opacity: 0 !important; }
+}
+
+/* 新增状态：部分任务待核实（已关闭但找不到合入记录） */
+.milestone-card[data-status=unverified] { border-color: color-mix(in srgb, var(--muted) 45%, transparent); }
+.milestone-card[data-status=unverified] .milestone-state { color: var(--muted); }
+.milestone-card[data-status=unverified] .milestone-fill { background: color-mix(in srgb, var(--accent) 55%, var(--muted)); }
+

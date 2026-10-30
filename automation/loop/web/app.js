@@ -663,14 +663,27 @@ function renderProjectPhase(github, data) {
     const stage=roadmap?.stages?.find(x=>x.id===id);
     const unknown=!roadmap || roadmap.limited || !stage || !stage.total;
     const active=!unknown && stage.issues.some(number=>phases.has(number));
-    const state=unknown ? "unknown" : active ? "running" : stage.paused ? "paused" : stage.merged===stage.total && !stage.unknown ? "completed" : "waiting";
+    // 状态界定（优先级从高到低）：
+  //   unknown  数据缺失（GitHub 不可用 / 无归类）
+  //   running  有任务正在执行
+  //   paused   有暂停或阻塞任务
+  //   completed 全部合入且无待核实
+  //   unverified 有「已关闭但找不到合入记录」的任务 —— 过去这一档被并进 waiting，
+  //              导致卡片显示「等待推进」、点进明细却全是「未找到合入记录」
+  //   waiting  其余（有未合入任务，但既没在跑也没卡住）
+  const state=unknown ? "unknown"
+    : active ? "running"
+    : stage.paused ? "paused"
+    : stage.merged===stage.total && !stage.unknown ? "completed"
+    : stage.unknown > 0 ? "unverified"
+    : "waiting";
     if(active)running++;else if(state==="paused")paused++;
     if(!unknown){total+=stage.total;merged+=stage.merged;}
     const card=element("article",undefined,"milestone-card");card.dataset.status=state;
     card.setAttribute("role","button");card.setAttribute("tabindex","0");card.setAttribute("aria-label",id+" · "+names[id]+"，查看任务明细");
     const show=()=>showMilestoneDetail(id,names[id] ?? id,stage,Boolean(roadmap?.limited),roadmap?.source);
     card.addEventListener("click",show);card.addEventListener("keydown",event=>{if(event.key==="Enter" || event.key===" "){event.preventDefault();show();}});
-    const labels={unknown:"待核实",running:"进行中",paused:"暂停 / 阻塞",completed:"任务已合入 · 验收待确认",waiting:"等待推进"};
+    const labels={unknown:"待核实",running:"进行中",paused:"暂停 / 阻塞",completed:"任务已合入 · 验收待确认",unverified:"部分任务待核实",waiting:"等待推进"};
     const head=element("div",undefined,"milestone-heading");head.append(element("strong",id+" · "+(names[id] ?? id)),element("span",labels[state],"milestone-state"));card.append(head);
     const track=element("div",undefined,"milestone-track"), fill=element("span",undefined,"milestone-fill");
     track.setAttribute("role","progressbar");track.setAttribute("aria-label",id+" 已归类任务的合入进度");

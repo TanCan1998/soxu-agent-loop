@@ -1,0 +1,4 @@
+#!/bin/sh
+# 提交前校验 <gitmoji> type(scope): 描述
+# 启用：git config core.hooksPath .githooks
+node "$(git rev-parse --show-toplevel)/scripts/check-commit-msg.mjs" "$1"
