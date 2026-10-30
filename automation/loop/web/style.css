@@ -154,13 +154,22 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
 /* 发布按钮浮出气泡（flip menu）：绝对定位在按钮下方，不是文档流里的两个按钮 */
 .flip-wrap{position:relative;display:inline-block}
-.flip-menu{position:absolute;top:calc(100% + 8px);right:0;z-index:30;display:flex;flex-direction:column;align-items:stretch;gap:2px;min-width:240px;padding:8px;border:1px solid var(--border);border-radius:14px;background:var(--panel);box-shadow:0 14px 40px #00000066,0 0 0 1px #ffffff08}
+.flip-menu{position:absolute;top:calc(100% + 8px);right:0;z-index:30;display:flex;flex-direction:column;align-items:stretch;gap:2px;min-width:240px;max-width:calc(100vw - 16px);max-height:calc(100vh - 120px);overflow:auto;padding:8px;border:1px solid var(--border);border-radius:14px;background:var(--panel);box-shadow:0 14px 40px #00000066,0 0 0 1px #ffffff08}
 .flip-menu[hidden]{display:none}
 .flip-menu::before{content:"";position:absolute;top:-5px;right:22px;width:10px;height:10px;transform:rotate(45deg);background:var(--panel);border-left:1px solid var(--border);border-top:1px solid var(--border)}
 .flip-item{border:1px solid transparent;background:transparent;text-align:left;font-size:13px;border-radius:9px;padding:9px 12px}
 .flip-item:not(:disabled):hover{box-shadow:0 0 0 1px color-mix(in srgb,var(--accent,#528fff) 38%,transparent),0 0 16px -2px color-mix(in srgb,var(--accent,#528fff) 45%,transparent)}
 .flip-item:disabled{opacity:.45}
 .flip-menu .subtle{margin:6px 4px 2px;font-size:11px;line-height:1.5}
+
+/* 窄屏 / 触屏：浮层改为流内全宽展开。
+   absolute + right:0 在手机上会把菜单推出视口（按钮靠左时左侧出屏、页面靠底时被裁掉），
+   结果是菜单项既看不到也点不到。改成 static 后菜单参与正常布局，随页面滚动，永远可点。 */
+@media (max-width: 900px){
+  .actions .flip-wrap{position:static;display:flex;flex-direction:column;flex:1 1 100%}
+  .flip-menu{position:static;top:auto;right:auto;min-width:0;width:100%;max-height:none;margin-top:8px;box-shadow:none}
+  .flip-menu::before{display:none}
+}
 
 /* 确认弹窗按钮：右下角对齐，取消在左、确认在右 */
 .dialog-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
