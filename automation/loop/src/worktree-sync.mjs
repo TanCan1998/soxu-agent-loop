@@ -268,7 +268,7 @@ export async function prepareWorktreeRecovery(states, options = {}) {
     const allowed = row && (["synced", "synced-conflicts", "up-to-date", "no-worktree", "agent-commit-recoverable"].includes(row.reason));
     if (allowed) {
       // base 是集成分支（policy.integrationBranch），不一定是 main，日志里要如实显示
-      const baseName = row?.base ?? state?.base ?? base;
+      const baseName = row?.base ?? state?.base ?? options.base ?? "main";
       if (row.reason === "synced-conflicts") {
         console.log("Worktree #" + row.issue + " rebased onto latest " + baseName + " with recoverable conflicts; Pi Developer will resolve from stash backup.");
       } else if (row.reason === "synced") {
