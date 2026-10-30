@@ -488,3 +488,74 @@ body.dragging-draft .queue-item{cursor:grabbing}
   .global-run { padding: 4px 10px; font-size: 10px; }
 }
 
+
+/* ── 「已关闭 · 未找到合入记录」弱化 ──
+   这只是一个信息性状态，不是错误，用灰色而不是醒目的黄色。 */
+.milestone-state[data-state=unverified] { color: var(--muted); opacity: .7; font-weight: 400; }
+[data-theme="light"] .milestone-state[data-state=unverified] { color: var(--muted); opacity: .75; }
+
+/* ── 即将进行的任务：单行省略 + 总数，不滚动 ── */
+.phase-tasks {
+  flex-wrap: nowrap;
+  overflow: hidden;            /* 不再横向滚动 */
+  margin: 14px 0 10px;         /* 上下间距 */
+  gap: 6px;
+}
+.phase-tasks .phase-task-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.phase-tasks-more { flex: none; color: var(--muted); }
+.phase-tasks-total { flex: none; margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; }
+
+/* 整行只在桌面端显示 */
+@media (max-width: 900px) {
+  .phase-tasks { display: none; }
+}
+
+
+/* ── 进行中里程碑的流动光：去掉白色圆点阵列 ──
+   原实现用 radial-gradient 每 19px 铺一个白点，在深色进度条上
+   看起来像渲染噪点而不是进度反馈。只保留低透明度的流动光。 */
+.milestone-motion::after { display: none; }
+.milestone-motion {
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 55%, transparent), transparent);
+  opacity: .55;
+}
+@media (prefers-reduced-motion: reduce) {
+  .milestone-motion { animation: none !important; opacity: 0; }
+}
+
+
+/* ── 进度条动画：浅色粗斜线遮罩，从右往左流动 ──
+   只铺在 .milestone-fill 内部（已完成的左侧部分），
+   轨道右侧未完成区域保持纯背景色。
+   替代原来的 .milestone-motion 流动光（那层会盖住整条轨道）。 */
+.milestone-motion { display: none; }
+.milestone-fill {
+  position: relative;
+  overflow: hidden;
+}
+.milestone-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0 5px,
+    color-mix(in srgb, #fff 26%, transparent) 5px 10px
+  );
+  animation: milestone-stripes 1.1s linear infinite;
+}
+@keyframes milestone-stripes {
+  from { background-position: 0 0; }
+  to   { background-position: -14.14px 0; }   /* 一个条纹周期，视觉上向左流动 */
+}
+@media (prefers-reduced-motion: reduce) {
+  .milestone-fill::after { animation: none; }
+}
+

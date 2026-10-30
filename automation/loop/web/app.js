@@ -618,6 +618,8 @@ function showMilestoneDetail(id, name, stage, limited, source) {
       : { key:"pending", label:"待处理", icon:"○" };
     const chip=element("span",state.icon+" "+state.label,"milestone-state");
     chip.dataset.state=state.key;
+    // 「未找到合入记录」容易被读成异常，这里把成因写进 tooltip
+    if(state.key==="unverified") setTip(chip,"issue 已关闭，但没有找到合并进集成分支的 PR 记录：可能是早期合入 main、PR 描述未写 Closes，或人工关闭。");
     if(item.localStatus) setTip(chip,"本地状态："+item.localStatus+"（未查询 GitHub）");
     row.append(label,chip); list.append(row);
     }
@@ -635,12 +637,15 @@ function renderPhaseTasks(data) {
   const list = active.length ? active : upcoming;
   host.append(element("span", active.length ? "活跃任务：" : "即将进行的任务：", "phase-tasks-label"));
   if (!list.length) { host.append(element("span", "无", "subtle")); return; }
-  for (const task of list.slice(0, 8)) {
+  // 单行显示，超出用省略号收尾；右侧给出总数，不再横向滚动。
+  const shown = list.slice(0, 6);
+  for (const task of shown) {
     const chip = element("span", task.title, "phase-task-chip");
     setTip(chip, "#" + task.id + " " + task.title);
     host.append(chip);
   }
-  if (list.length > 8) host.append(element("span", "+" + (list.length - 8) + " 项", "subtle"));
+  if (list.length > shown.length) host.append(element("span", "…", "phase-tasks-more"));
+  host.append(element("span", "共 " + list.length + " 条", "phase-tasks-total"));
 }
 function renderProjectPhase(github, data) {
   // GitHub 不可用时退回本地检查点推出的路线图，避免整块变成"待核实"。
@@ -679,7 +684,7 @@ function renderProjectPhase(github, data) {
   $("projectPhaseTitle").textContent=!roadmap ? "项目里程碑状态待核实" : running ? `${running} 个里程碑正在推进` : paused ? `${paused} 个里程碑有暂停或阻塞任务` : "已归类里程碑当前无活跃任务";
   $("projectPhaseCount").textContent=roadmap && !roadmap.limited ? `${merged} / ${total} 项已合入${local ? "（本地推定）" : ""}` : "—";
   renderPhaseTasks(data);
-  $("projectPhaseDetail").textContent=!roadmap ? "GitHub 与本地检查点都没有可用的里程碑数据。" : roadmap.limited ? "GitHub 查询达到上限，进度待核实。" : local ? `GitHub 暂不可用，以上按本地检查点与任务文件推定；未归类 ${roadmap.unclassified} 项。合入与验收仍需在 GitHub 复核。` : `按任务元数据或 GitHub 里程碑自动归类；未归类 ${roadmap.unclassified} 项。运行状态基于控制台活动，数据可能有延迟。`;
+  $("projectPhaseDetail").textContent=!roadmap ? "GitHub 与本地检查点都没有可用的里程碑数据。" : roadmap.limited ? "GitHub 查询达到上限，进度待核实。" : local ? "GitHub 暂不可用，以上按本地检查点与任务文件推定；合入与验收仍需在 GitHub 复核。" : "按任务元数据或 GitHub 里程碑自动归类；运行状态基于控制台活动，数据可能有延迟。";
 }
 
 function render(data) {

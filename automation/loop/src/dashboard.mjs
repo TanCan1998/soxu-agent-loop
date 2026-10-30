@@ -326,7 +326,10 @@ export class DashboardCoordinator extends EventEmitter {
     this.githubNext = Date.now() + 60000;
     this.githubPending = Promise.resolve().then(async () => this.githubStatus(this.root, undefined, await integrationBase())).then(tasks => {
       this.github = {status:"ok", updatedAt:new Date().toISOString(), tasks};
-    }).catch(() => {
+    }).catch((error) => {
+      // 过去这里静默吞掉错误，导致面板只显示「GitHub 不可用」而无从排查
+      // （2026-10-30 实际是 TASK-032.md 的 frontmatter 少了闭合 ---）。
+      this.push("GitHub status unavailable: " + String(error?.message ?? error).slice(0, 300), "system");
       this.github = {status:"unavailable", updatedAt:null, tasks:{}};
     }).finally(() => { this.githubPending = null; this.emit("dashboard:event", {type:"status",data:{}}); });
   }
