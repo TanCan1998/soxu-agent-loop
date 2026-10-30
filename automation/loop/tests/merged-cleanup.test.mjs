@@ -5,7 +5,7 @@ import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {run} from "../src/process.mjs";
 import {writeCheckpoint,readCheckpoint} from "../src/checkpoint.mjs";
-import {cleanupMergedTasks} from "../src/merged-cleanup.mjs";
+import {cleanupMergedTasks,selectOrphanTasks} from "../src/merged-cleanup.mjs";
 
 async function fixture(fn){const tmp=await mkdtemp(join(tmpdir(),"soxu-cleanup-")),root=join(tmp,"repo"),wt=join(tmp,"soxu-worktrees","github-issue-1-example"),remote=join(tmp,"remote.git"),branch="agent/github-issue-1-example";
  const git=async(args,cwd=root)=>run("git",args,{cwd});
@@ -20,6 +20,18 @@ test("dirty and ignored user data preserve local worktree and branch",()=>fixtur
 test("unmerged, changed PR head and active lock preserve everything",()=>fixture(async x=>{x.setPr({state:"OPEN",mergedAt:null});assert.equal((await x.clean())[0].status,"not-verified");x.setPr({state:"MERGED",mergedAt:"now",headRefOid:"f".repeat(40)});assert.equal((await x.clean())[0].status,"not-verified");await mkdir(join(x.root,".soxu","locks"),{recursive:true});const h=await open(join(x.root,".soxu","locks","github-issue-1.lock"),"w");await h.close();assert.equal((await x.clean())[0].status,"locked");await access(x.wt);}));
 test("remote ref advanced after merge is not deleted and local copy is preserved",()=>fixture(async x=>{await writeFile(join(x.wt,"change"),"more");await x.git(["add","change"],x.wt);await x.git(["commit","-m","new"],x.wt);await x.git(["push","origin",x.branch],x.wt);const [r]=await x.clean();assert.equal(r.remote,"changed");await access(x.wt);}));
 test("manually removed worktree and refs are recorded as cleaned",()=>fixture(async x=>{await x.git(["worktree","remove",x.wt]);await x.git(["branch","-D",x.branch]);await x.git(["push","origin",`:${x.branch}`]);const [r]=await x.clean();assert.equal(r.status,"cleaned");assert.equal(r.local,"absent");assert.equal(r.remote,"absent");assert.deepEqual(await x.clean(),[]);}));
+
+test("orphan archival requires BOTH a closed issue and a merged PR citing it", () => {
+  const candidates = [
+    { taskId: "TASK-001", issue: 101 }, // 关闭 + 有合入 → 归档
+    { taskId: "TASK-002", issue: 102 }, // 关闭但无合入 → 保留（手动关闭不等于做完）
+    { taskId: "TASK-003", issue: 103 }, // 有合入但 issue 还开着 → 保留
+    { taskId: "TASK-004", issue: 104 }, // 都不满足 → 保留
+  ];
+  const closed = new Set([101, 102, 104]);
+  const merged = new Set([101, 103]);
+  assert.deepEqual(selectOrphanTasks(candidates, closed, merged).map(c => c.taskId), ["TASK-001"]);
+});
 
 test("cleanup closes the issue even when the worktree was already cleaned", async () => {
   const root = await mkdtemp(join(tmpdir(), "soxu-cleanup-close-"));
