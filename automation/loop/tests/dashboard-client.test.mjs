@@ -883,6 +883,20 @@ test("publish failures explain themselves in plain language", async () => {
   assert.match(view.elements.toast.textContent, /external-runner-active/);
 });
 
+test("the publish bubble stays inside the viewport on phones", async () => {
+  const css = await readFile(new URL("../web/style.css", import.meta.url), "utf8");
+  // 窄屏必须换成流内布局：absolute + right:0 在手机上会把菜单推出视口，菜单项点不到。
+  assert.match(
+    css,
+    /@media \(max-width: 900px\)\{[\s\S]*?\.flip-menu\{position:static/,
+    "narrow screens must lay the publish menu out in flow"
+  );
+  assert.match(css, /\.actions \.flip-wrap\{position:static/, "the wrap must not keep a positioning context on phones");
+  // 桌面端也要有视口约束兜底，避免菜单超出可点区域。
+  assert.match(css, /\.flip-menu\{[^}]*max-width:calc\(100vw - 16px\)/, "menu must be clamped to the viewport width");
+  assert.match(css, /\.flip-menu\{[^}]*max-height:calc\(100vh - 120px\)/, "menu must be clamped to the viewport height");
+});
+
 test("the publish bubble closes when clicking outside it", async () => {
   const view = page();
   view.elements.token.value = TOKEN;
