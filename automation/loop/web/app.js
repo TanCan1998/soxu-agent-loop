@@ -1177,11 +1177,30 @@ function renderQueue() {
     if (item.url && /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/.test(item.url)) {title.href=item.url;title.target="_blank";title.rel="noopener noreferrer";}
     const checkpoint=item.checkpoint;
     const live=(data.taskPhases || []).find(t=>t.taskId===item.number);
-    const state=item.state === "CLOSED" ? (item.merged ? "已关闭 · PR 已合并" : "已关闭 · 未找到合入记录") : live?.status === "running" ? "执行中 · "+live.phase : checkpoint?.status === "paused" ? "已暂停 · "+(checkpoint.phase ?? "") : checkpoint?.status === "blocked" ? "已阻塞 · "+(checkpoint.phase ?? "") : "等待执行";
+    // 状态描述与右侧开关必须同源，否则会出现「执行中」配「未就绪」的矛盾。
+    // 唯一数据源 = 互斥的状态标签（agent:ready / waiting / in-progress / paused / blocked / pr），
+    // checkpoint 只用来补阶段后缀，不再独立决定状态词。
+    const AGENT_LABEL_TEXT = {
+      "agent:ready": "就绪 · 等待认领",
+      "agent:waiting": "等待前置任务",
+      "agent:in-progress": "执行中",
+      "agent:paused": "已暂停",
+      "agent:blocked": "已阻塞",
+      "agent:pr": "已交付 · 待合并",
+    };
+    const agentLabel = (item.labels || []).find(l => AGENT_LABEL_TEXT[l]);
+    const phaseText = live?.phase ?? checkpoint?.phase ?? "";
+    const closedText = item.merged ? "已关闭 · PR 已合并" : "已关闭 · 未找到合入记录";
+    const state = item.state === "CLOSED"
+      ? closedText
+      : (AGENT_LABEL_TEXT[agentLabel] ?? "未开启 · 等待设为就绪") + (phaseText ? " · " + phaseText : "");
     row.append(title,element("span",state,"queue-state"));
-    // 已创建需求也能直接切换 ready（打标签前服务端会做依赖校验）
-    if (item.state === "OPEN") {
-      const isReady = (item.labels || []).includes("agent:ready");
+    // ready 开关只在「可调度」的状态下出现：已就绪可取消，未开启/等依赖可开启。
+    // 执行中 / 已暂停 / 已阻塞 / 已交付 不显示开关——那些状态由左侧文字说明，
+    // 再挂一个「未就绪」只会自相矛盾。
+    const SCHEDULABLE_LABELS = new Set([undefined, "agent:waiting", "agent:ready"]);
+    if (item.state === "OPEN" && SCHEDULABLE_LABELS.has(agentLabel)) {
+      const isReady = agentLabel === "agent:ready";
       const box = element("input");
       box.type = "checkbox";
       box.checked = isReady;
