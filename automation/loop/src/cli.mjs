@@ -297,11 +297,47 @@ switch (command) {
   case "watch": {
     if (local || dryRun) throw new Error("watch requires GitHub mode and cannot be dry-run");
     await verifyLockfiles();
+    // 与 loop 一致：启动即代表上一个 runner 已退出，残留的 running 状态都是脏的。
+    await clearStaleRunning();
     const stopAt = Date.now() + p.maxContinuousHours * 3600000;
     let handled = 0;
     console.log(`Watch enabled for at most ${p.maxContinuousHours}h, max ${p.maxIssuesPerWatch} attempted issues`);
+    /**
+     * 恢复被中断的任务。
+     *
+     * 被中断的任务是 agent:paused，不在 ready 队列里 —— issues() 看不到它们。
+     * 过去只有 loop 在启动时恢复一次，watch 完全不恢复，于是「用 watch 挂一晚上」
+     * 永远推不动任何中断过的任务，必须切回 loop 才行。
+     *
+     * watch 是常驻的，所以不只启动时补，每一轮轮询前都补一次：
+     * 长时间运行期间随时可能有任务因为超时、模型错误或网络抖动被打断。
+     * 恢复的任务不占 maxIssuesPerWatch 配额 —— 它们是已有工作，不是新认领。
+     */
+    const resumeInterrupted = async () => {
+      if (controller.signal.aborted) return;
+      let interrupted;
+      try {
+        interrupted = (await listPaused(undefined, { includeBlocked: false })).filter(s => !s.local);
+      } catch (error) {
+        // 读 checkpoint 失败不该打断整轮 watch：下一轮还会重试。
+        console.warn("Failed to list interrupted tasks: " + safeFailureMessage(error, 200));
+        return;
+      }
+      if (!interrupted.length) return;
+      console.log("Resuming " + interrupted.length + " interrupted task(s) before polling");
+      try {
+        await recover(null, { includeBlocked: false });
+      } catch (error) {
+        console.warn("Resume failed: " + safeFailureMessage(error, 200));
+      }
+    };
+    await resumeInterrupted();
+    if (controller.signal.aborted) break;
     while (!controller.signal.aborted && Date.now() < stopAt && handled < p.maxIssuesPerWatch) {
       await cleanup();
+      // 每轮都补一次：watch 期间可能有任务被打断
+      await resumeInterrupted();
+      if (controller.signal.aborted) break;
       const before = await issues();
       const batch = before.slice(0, Math.min(p.maxConcurrentAgents, p.maxIssuesPerWatch - handled));
       if (batch.length) {
