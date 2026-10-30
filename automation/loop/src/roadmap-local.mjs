@@ -1,6 +1,6 @@
 import { ROOT } from "./config.mjs";
 
-const NAMES = { M0: "工程治理", M1: "产品原型", M2: "多 Agent", M3: "开发工具", M4: "交付发布" };
+import { milestoneName, stageIds } from "./milestones.mjs";
 
 /**
  * Milestone progress derived from the local catalog and checkpoints only.
@@ -8,7 +8,9 @@ const NAMES = { M0: "工程治理", M1: "产品原型", M2: "多 Agent", M3: "�
  * offline instead of rendering "details unavailable".
  */
 export function buildLocalRoadmap(tasks, progress) {
-  const stages = Object.fromEntries(Object.keys(NAMES).map(id => [id, { id, name: NAMES[id], total:0, merged:0, running:0, paused:0, unknown:0, issues:[], items:[] }]));
+  // 里程碑集合动态：已登记的 + 实际数据里出现的（新增 M5 后自动出现卡片）
+  const extra = (tasks ?? []).map(t => t.milestone).filter(Boolean);
+  const stages = Object.fromEntries(stageIds(extra).map(id => [id, { id, name: milestoneName(id), total:0, merged:0, running:0, paused:0, unknown:0, issues:[], items:[] }]));
   const status = new Map();
   for (const group of ["done","running","paused","blocked","pending"]) {
     for (const item of progress?.[group] ?? []) status.set(item.id, group);

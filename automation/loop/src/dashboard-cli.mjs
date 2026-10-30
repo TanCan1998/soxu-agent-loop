@@ -37,7 +37,7 @@ async function toolCommit() {
   } catch { return null; }
 }
 /**
- * 启动时记录 boot 提交。磁盘检出被更新（热更新按钮、git pull、合并 PR）后进程仍在跑旧代码，
+ * 启动时记录 boot 提交。磁盘检出被更新（更新按钮、git pull、合并 PR）后进程仍在跑旧代码，
  * 这里定期比对并自动重启，避免"已是最新"却仍是旧服务的情况。
  */
 const bootCommit = await toolCommit();
@@ -110,7 +110,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 /**
  * 自动重启看门狗：只在"磁盘代码已变、进程还是旧的"时动作。
  * - 同一提交只尝试一次，避免替换失败后无限重启；
- * - 正在应用热更新时跳过，交给 update 流程自己的重启，避免打断冒烟检查。
+ * - 正在应用更新时跳过，交给 update 流程自己的重启，避免打断冒烟检查。
  */
 let restartedFor = null;
 async function watchToolCommit() {

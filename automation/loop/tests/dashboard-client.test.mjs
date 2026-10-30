@@ -76,7 +76,7 @@ function node() {
 }
 function page({ storage = new Map(), handler = () => response(), hidden = false, preferences = new Map(), streamSupport = false, navigatorClipboard, execCommand = () => false, secureContext, confirmResult = true, promptResult = null } = {}) {
   const ids = [
-    "milestoneDialog", "milestoneTitle", "milestoneDetails", "closeMilestone", "token", "tokenLabel", "authPanel", "authNotice", "connect", "notice", "connection", "dot", "globalRun", "running", "pending", "done",
+    "milestoneDialog", "milestoneTitle", "milestoneDetails", "closeMilestone", "token", "tokenLabel", "authPanel", "authNotice", "connect", "notice", "globalRun", "running", "pending", "done",
     "total", "badge", "runner", "updated", "stop", "tasks", "logs", "refresh", "copyLogs", "intakeRunState", "productReports", "productCopy", "productDelete", "productClear", "qualityReports", "qualityCopy", "qualityDelete", "qualityClear",
     "navOverview", "navExecution", "navMonitor", "navRequirements", "navLanes", "navModels", "pageOverview", "pageExecution", "pageMonitor", "pageRequirements", "pageLanes", "pageModels", "modelSummary", "openModels", "closeModels", "reloadModels", "saveModels", "modelScope", "modelSearch", "modelInherit", "modelDialog", "modelGroups", "modelMessage", "logLimit", "logFilter", "followLogs", "logCount", "agentCards", "githubStatus", "autoMerge", "updateStatus", "updateTool", "taskFilters", "draftFilters", "milestoneFilters", "projectPhaseTasks",
     "publishButton", "publishMenu", "publishPreview", "publishRelease", "publishHint", "tip", "restartOverlay",
@@ -145,14 +145,12 @@ test("authenticated token survives same-tab reload and reconnects automatically"
   first.elements.token.value = TOKEN;
   first.elements.connect.dispatch("click");
   await tick();
-  assert.equal(first.elements.connection.textContent, "本机已连接");
   assert.equal(first.elements.authPanel.hidden, true);
   assert.equal(storage.get(TOKEN_STORAGE_KEY), TOKEN);
 
   const reloaded = page({ storage });
   await tick();
   assert.equal(reloaded.elements.token.value, TOKEN);
-  assert.equal(reloaded.elements.connection.textContent, "本机已连接");
   const statusRequests = reloaded.requests.filter(x => x.path === "/api/status");
   assert.equal(statusRequests.length, 1);
   assert.equal(statusRequests[0].options.headers["X-SOXU-Control-Token"], TOKEN);
@@ -164,7 +162,6 @@ test("rejecting a token clears only the matching stored session", async () => {
   await tick();
   assert.equal(storage.has(TOKEN_STORAGE_KEY), false);
   assert.equal(reloaded.elements.token.value, "");
-  assert.equal(reloaded.elements.connection.textContent, "未连接");
   assert.equal(reloaded.elements.authPanel.hidden, false);
   assert.match(reloaded.elements.notice.textContent, /令牌已失效/);
   assert.ok(reloaded.actions.every(button => button.disabled));
@@ -185,12 +182,10 @@ test("temporary network errors retain the token and allow reconnection", async (
   } });
   await tick();
   assert.equal(storage.get(TOKEN_STORAGE_KEY), TOKEN);
-  assert.equal(view.elements.connection.textContent, "连接中断");
   assert.equal(view.elements.authPanel.hidden, false);
   available = true;
   view.elements.refresh.dispatch("click");
   await tick();
-  assert.equal(view.elements.connection.textContent, "本机已连接");
   assert.equal(view.elements.authPanel.hidden, true);
 });
 
@@ -203,7 +198,6 @@ test("hidden-page reload restores the token when the page becomes visible", asyn
   view.document.dispatch("visibilitychange");
   await tick();
   assert.equal(view.requests.filter(x => x.path === "/api/status").length, 1);
-  assert.equal(view.elements.connection.textContent, "本机已连接");
 });
 
 test("invalid stored data is discarded without connecting", async () => {
@@ -227,7 +221,6 @@ test("an earlier response cannot authenticate a newly edited token", async () =>
   release(response());
   await tick();
   assert.equal(storage.has(TOKEN_STORAGE_KEY), false);
-  assert.notEqual(view.elements.connection.textContent, "本机已连接");
 });
 
 test("log settings show only latest 50 / 20 / 100 / 200 rows and remember preference", async () => {
@@ -306,7 +299,9 @@ test("theme preference survives reload", async()=>{
 });
 
 test("project milestones derive dynamic task counts and live evidence",async()=>{
-  const stages=[{id:"M0",total:0,merged:0,paused:0,unknown:0,issues:[]},{id:"M1",total:3,merged:2,paused:0,unknown:0,issues:[1,2,3],items:[{number:1,title:"任务一",state:"CLOSED",url:"https://github.com/TanCan1998/SOXU/issues/1",labels:[],merged:true}]},{id:"M2",total:1,merged:0,paused:1,unknown:0,issues:[4]}];
+  // 后端现在返回 name 字段（里程碑名称的单一来源是 milestones.mjs），
+  // 且 stages 数量由后端决定，前端不再写死 M0–M4。
+  const stages=[{id:"M0",name:"工程治理",total:0,merged:0,paused:0,unknown:0,issues:[]},{id:"M1",name:"产品原型",total:3,merged:2,paused:0,unknown:0,issues:[1,2,3],items:[{number:1,title:"任务一",state:"CLOSED",url:"https://github.com/TanCan1998/SOXU/issues/1",labels:[],merged:true}]},{id:"M2",total:1,merged:0,paused:1,unknown:0,issues:[4]}];
   const snapshot={...STATUS,runner:{command:"once",startedAt:"2026-10-27T00:00:00Z"},taskPhases:[{taskId:3,status:"running"}],github:{status:"ok",updatedAt:"2026-10-27T00:00:00Z",tasks:{__roadmap:{stages,unclassified:2,limited:false}}}};
   const app=page({handler:()=>({ok:true,status:200,json:async()=>snapshot})});
   app.elements.token.value=TOKEN;app.elements.connect.dispatch("click");await tick();
@@ -636,7 +631,7 @@ test("milestone detail falls back to local checkpoints when GitHub is unavailabl
   app.elements.connect.dispatch("click");
   await tick();
   const cards = app.elements.roadmapCards.children;
-  assert.equal(cards.length, 5);
+  assert.equal(cards.length, 2);  // mock 只提供 M0/M1；真实后端会返回全部已登记 + 实际出现的
   assert.equal(cards[1].dataset.status, "completed");
   assert.match(app.elements.projectPhaseCount.textContent, /2 \/ 2 项已合入（本地推定）/);
   assert.match(app.elements.projectPhaseDetail.textContent, /本地检查点/);
@@ -781,7 +776,7 @@ test("the update button checks when current and applies when an update is availa
   assert.match(app.elements.updateStatus.textContent, /已更新到 22222222 · 控制台正在重启/);
   assert.match(app.elements.updateTool.getAttribute("data-tip"), /（无需更新）/);
   assert.equal(app.elements.updateTool.disabled, false);
-  // 热更新重启期间显示覆盖层。
+  // 更新重启期间显示覆盖层。
   assert.equal(app.elements.restartOverlay.hidden, false, "restart overlay shows while restarting");
 
   // Already current: the click only checks.
