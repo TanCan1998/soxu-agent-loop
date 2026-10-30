@@ -99,6 +99,21 @@ process.stdin.on('data',c=>{
   }
 });
 
+test("watch resumes interrupted tasks the same way loop does", async () => {
+  const source = await readFile(new URL("../src/cli.mjs", import.meta.url), "utf8");
+  const start = source.indexOf('case "watch"');
+  const end = source.indexOf('case "loop"');
+  assert.ok(start > 0 && end > start, "找到 watch 分支");
+  const block = source.slice(start, end);
+  // 被中断的任务是 agent:paused，不在 ready 队列里；issues() 看不到它们。
+  // 过去只有 loop 恢复，watch 完全不恢复，于是「挂一晚上」推不动任何中断任务。
+  assert.match(block, /clearStaleRunning/, "watch 清理僵尸 running 状态");
+  assert.match(block, /listPaused/, "watch 读取中断任务");
+  assert.match(block, /recover\(null, \{ includeBlocked: false \}\)/, "watch 只恢复 paused，blocked 需人工确认");
+  // 定义一次 + 启动时调用 + 每轮轮询前调用
+  assert.ok(block.split("resumeInterrupted").length - 1 >= 3, "启动时与每轮轮询前都恢复");
+});
+
 test("watch polling wait stops promptly when interrupted", async () => {
   const { interruptibleWait } = await import("../src/interruptible-wait.mjs");
   const controller = new AbortController();
