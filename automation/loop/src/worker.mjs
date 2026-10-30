@@ -100,6 +100,10 @@ async function worktreeFor(issue, local, state, base = "main") {
       : ["worktree", "add", "-b", branch, directory, local ? base : "origin/" + base];
     await git(addArgs, ROOT);
   }
+  // rerere：记录冲突解决，重复冲突自动复用（同一插入点会反复冲突，见 docs/loop-robustness-plan.md）。
+  // 只作起点——复用的结果仍要经过 checks 与 review 验证。
+  await git(["config", "rerere.enabled", "true"], directory).catch(() => {});
+  await git(["config", "rerere.autoupdate", "true"], directory).catch(() => {});
   const foundBranch = await git(["branch", "--show-current"], directory);
   if (foundBranch !== branch) throw new Error("Worktree already exists but belongs to another branch");
   return { branch, directory };
@@ -204,7 +208,8 @@ export async function pinTaskModels(state, issueNumber, load, persist) {
  * 不代表 GitHub 最终会合并成功（冲突、必需检查卡住、分支保护变化都会让它停在 OPEN）。
  */
 async function inspectPr(prUrl) {
-  const { stdout } = await run("gh", ["pr", "view", prUrl, "--json", "state,mergeable,mergeStateStatus,mergedAt"],
+  const { stdout } = await run("gh", ["pr", "view", prUrl,
+    "--json", "state,mergeable,mergeStateStatus,mergedAt,mergeCommit,headRefName,baseRefName"],
     { cwd: ROOT, timeoutMs: 45000 });
   return JSON.parse(stdout);
 }
@@ -233,6 +238,62 @@ async function waitForMerged(prUrl, { policy, signal }) {
     await new Promise(resolve => setTimeout(resolve, 15000));
   }
   return false;
+}
+
+
+/**
+ * PR 与集成分支冲突时的自动恢复。
+ *
+ * 借鉴 Factory《Merge conflict resolution with coding agents》的流程：
+ * 固定 base、按类型分类处理、保持解决范围窄、不可解则停下报告。
+ *
+ * 返回：
+ *   { status: "rebased" }                      已自动 rebase（无冲突或 lockfile 自动处理）
+ *   { status: "delegated", files, blockCount } 冲突规模可控，保留现场交 Developer 解决
+ *   { status: "manual", files, blockCount }    冲突过大，abort 并交人工
+ *   { status: "failed", reason }               rebase 本身失败且无冲突文件
+ */
+async function attemptConflictRecovery({ directory, base, policy, signal }) {
+  const gitOpts = { cwd: directory, timeoutMs: 180000, signal, allowFailure: true };
+  await git(["fetch", "origin", base], directory);
+  const rebase = await run("git", ["rebase", "origin/" + base], gitOpts);
+  if (rebase.exitCode === 0) return { status: "rebased" };
+
+  const unmerged = await run("git", ["diff", "--name-only", "--diff-filter=U"], gitOpts);
+  const files = String(unmerged.stdout ?? "").split("\n").map(x => x.trim()).filter(Boolean);
+  if (!files.length) {
+    await run("git", ["rebase", "--abort"], gitOpts);
+    return { status: "failed", reason: safeFailureMessage(rebase.stderr || "rebase failed", 300) };
+  }
+
+  // lockfile 冲突：取 base 版本后重新生成，不做逐行合并（Factory 的做法）。
+  const lockfiles = files.filter(f => /(Cargo\.lock|pnpm-lock\.yaml|package-lock\.json)$/.test(f));
+  if (lockfiles.length === files.length) {
+    for (const f of lockfiles) await run("git", ["checkout", "--theirs", "--", f], gitOpts);
+    await run("git", ["add", "--", ...lockfiles], gitOpts);
+    const cont = await run("git", ["rebase", "--continue"], { ...gitOpts, env: { ...process.env, GIT_EDITOR: "true" } });
+    if (cont.exitCode === 0) {
+      console.log("Resolved lockfile-only conflict by taking base versions");
+      return { status: "rebased" };
+    }
+  }
+
+  // 统计冲突块，判断是否超出 agent 可靠处理的范围。
+  let blockCount = 0;
+  for (const f of files) {
+    try {
+      const content = await readFile(join(directory, f), "utf8");
+      blockCount += (content.match(/^<<<<<<< /gm) ?? []).length;
+    } catch { /* 二进制或已删除文件 */ }
+  }
+  const maxFiles = policy.recovery?.maxConflictFiles ?? 3;
+  const maxBlocks = policy.recovery?.maxConflictBlocks ?? 8;
+  if (files.length > maxFiles || blockCount > maxBlocks) {
+    await run("git", ["rebase", "--abort"], gitOpts);
+    return { status: "manual", files, blockCount };
+  }
+  // 保留冲突现场：Developer 在 develop 阶段接手解决。
+  return { status: "delegated", files, blockCount };
 }
 
 export async function processIssue(issue, { policy, local = false, dryRun = false, resume = false, allowBlocked = false, signal } = {}) {
@@ -349,16 +410,32 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
         idleExtensionSeconds: policy.timeouts?.idleExtensionSeconds,
         slowCommandPrefixes: policy.idleSlowCommands,
             prompt: promptFor("Developer", mainDocs + "\n\n" + devRole + "\n\n" + devPolicies, issue,
-              state.mergeConflict ? [
-                "MANDATORY MAIN INTEGRATION: Git HEAD has been safely fast-forwarded to latest origin/main.",
-                "Existing task edits are preserved in an immutable Git stash backup:",
-                state.mergeConflict.stashSha,
-                "Resolve EVERY existing conflict and recover prior useful task changes, prioritizing latest main behavior.",
-                "Inspect git status, git ls-files -u and git stash show -p (stash SHA above).",
-                "Do NOT delete the stash, reset Git HEAD, discard task progress, push or modify protected paths.",
-                "When finished, resolve unmerged index entries, implement the task and run relevant tests.",
-                state.feedback ?? "",
-              ].join("\n") : state.feedback,
+              state.mergeConflict?.reason === "pr-conflict"
+                ? [
+                    "MANDATORY PR CONFLICT RESOLUTION: this branch conflicts with the integration branch " + base + ".",
+                    "Conflicted files (" + (state.mergeConflict.files?.length ?? 0) + " files, " +
+                      (state.mergeConflict.blockCount ?? 0) + " conflict blocks):",
+                    ...(state.mergeConflict.files ?? []).map(f => "  - " + f),
+                    "",
+                    "Rules (from the merge-conflict runbook):",
+                    "- Read BOTH sides and the common ancestor before editing; preserve the intent of both changes.",
+                    "- Do NOT discard either side wholesale — that silently drops valid work.",
+                    "- Keep the resolution narrow: no unrelated formatting, dependency updates or refactors.",
+                    "- If the two sides made incompatible product decisions, STOP and explain instead of guessing.",
+                    "- Inspect git status and git ls-files -u to find remaining unmerged entries.",
+                    "When finished, stage resolved paths, keep the task working, and run relevant tests.",
+                    state.feedback ?? "",
+                  ].filter(line => line !== "").join("\n")
+                : state.mergeConflict ? [
+                    "MANDATORY MAIN INTEGRATION: Git HEAD has been safely fast-forwarded to latest origin/main.",
+                    "Existing task edits are preserved in an immutable Git stash backup:",
+                    state.mergeConflict.stashSha,
+                    "Resolve EVERY existing conflict and recover prior useful task changes, prioritizing latest main behavior.",
+                    "Inspect git status, git ls-files -u and git stash show -p (stash SHA above).",
+                    "Do NOT delete the stash, reset Git HEAD, discard task progress, push or modify protected paths.",
+                    "When finished, resolve unmerged index entries, implement the task and run relevant tests.",
+                    state.feedback ?? "",
+                  ].join("\n") : state.feedback,
               resume || state.attempt > 0), signal }); developerActivity.finish(true); }
           catch (error) { developerActivity.finish(false); throw error; }
           console.log(`Developer completed attempt ${state.attempt + 1}, response ${dev.text.length} chars`);
@@ -470,10 +547,36 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
             throw new LoopFailure("merge", "PR 已被关闭，无法合并：" + state.pr);
           }
           if (prInfo.mergeable === "CONFLICTING" || prInfo.mergeStateStatus === "DIRTY") {
-            state.mergeConflict = true;
+            // L1：先尝试自动恢复（rebase / lockfile 重生成），再按冲突规模决定交 Developer 还是人工。
+            const recovery = await attemptConflictRecovery({ directory: wt.directory, base, policy, signal });
+            if (recovery.status === "rebased") {
+              console.log("PR conflict auto-resolved by rebase; re-running checks");
+              delete state.mergeConflict;
+              await checkpoint("checks");
+              break;
+            }
+            if (recovery.status === "delegated") {
+              console.log(`PR conflict delegated to Developer (${recovery.files.length} files, ${recovery.blockCount} blocks)`);
+              state.mergeConflict = { reason: "pr-conflict", files: recovery.files, blockCount: recovery.blockCount };
+              state.conflictFixAttempts = (state.conflictFixAttempts ?? 0) + 1;
+              if (state.conflictFixAttempts > policy.maxRetries) {
+                throw new LoopFailure("merge",
+                  "PR 冲突自动解决尝试已用尽（" + policy.maxRetries + " 次）：" + state.pr);
+              }
+              await checkpoint("develop");
+              break;
+            }
+            // failed 或 manual：保留现场，交人工
+            state.mergeConflict = recovery.status === "manual"
+              ? { reason: "pr-conflict-manual", files: recovery.files, blockCount: recovery.blockCount }
+              : { reason: "pr-conflict-failed", detail: recovery.reason };
             await writeCheckpoint(state);
-            throw new LoopFailure("merge",
-              "PR 与集成分支 " + base + " 冲突（mergeable=CONFLICTING），需 rebase 后重跑：" + state.pr);
+            const detail = recovery.status === "manual"
+              ? "冲突规模超出自动处理阈值（" + recovery.files.length + " 文件 / " + recovery.blockCount +
+                " 处，阈值 " + (policy.recovery?.maxConflictFiles ?? 3) + " / " + (policy.recovery?.maxConflictBlocks ?? 8) + "）：\n" +
+                recovery.files.map(f => "  - " + f).join("\n")
+              : "rebase 失败且无冲突文件：" + (recovery.reason ?? "unknown");
+            throw new LoopFailure("merge", "PR 与集成分支 " + base + " 冲突，需人工处理：" + state.pr + "\n" + detail);
           }
           // 一次调用完成状态切换并附说明：PR 链接、目标分支、是否已请求自动合并。
           await setTaskState(issue.number, "agent:pr",
@@ -493,6 +596,15 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
                     "（检查必需检查是否卡住，或分支保护规则是否变化）");
                 }
                 state.autoMerge = "merged";
+                // 回写合并后的 commit SHA：cleanup 靠它确认「PR 确实合入」，
+                // 避免人工 rebase 后 head 变化导致 issue 永远不关闭（P0-2）。
+                try {
+                  const merged = await inspectPr(state.pr);
+                  state.mergedHead = merged.mergeCommit?.oid ?? null;
+                  await writeCheckpoint(state);
+                } catch (error) {
+                  console.warn("Unable to record mergedHead: " + safeFailureMessage(error, 200));
+                }
               } else {
                 console.warn(`Auto-merge skipped; ${base} required checks not verified: ${state.pr}`);
                 state.autoMerge = "skipped-protection";
