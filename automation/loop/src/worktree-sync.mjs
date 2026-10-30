@@ -267,10 +267,13 @@ export async function prepareWorktreeRecovery(states, options = {}) {
     }
     const allowed = row && (["synced", "synced-conflicts", "up-to-date", "no-worktree", "agent-commit-recoverable"].includes(row.reason));
     if (allowed) {
-      if (row.reason === "synced-conflicts")
-        console.log("Worktree #" + row.issue + " rebased onto latest main with recoverable conflicts; Pi Developer will resolve from stash backup.");
-      else if (row.reason === "synced")
-        console.log("Worktree #" + row.issue + " safely updated to latest main.");
+      // base 是集成分支（policy.integrationBranch），不一定是 main，日志里要如实显示
+      const baseName = row?.base ?? state?.base ?? base;
+      if (row.reason === "synced-conflicts") {
+        console.log("Worktree #" + row.issue + " rebased onto latest " + baseName + " with recoverable conflicts; Pi Developer will resolve from stash backup.");
+      } else if (row.reason === "synced") {
+        console.log("Worktree #" + row.issue + " safely updated to latest " + baseName + ".");
+      }
       eligible.push(state);
     } else {
       console.error("Worktree #" + state.issue.number + " cannot safely reconcile (" +
