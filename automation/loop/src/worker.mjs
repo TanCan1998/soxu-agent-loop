@@ -355,6 +355,30 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
     const mainDocs = await readFile(join(ROOT, "AGENTS.md"), "utf8");
     const devRole = await readFile(join(ROOT, "agents/roles/developer.md"), "utf8");
     const reviewRole = await readFile(join(ROOT, "agents/roles/reviewer.md"), "utf8");
+  /**
+   * 从 issue 正文里提取验收清单（`- [ ]` 形式的复选框）。
+   * 优先取「## 验收」小节，没有小节就全文扫描。
+   * 过去 reviewer 拿不到验收清单，只能对着 diff 泛泛审查，
+   * issue 关闭时那些复选框通常还是空的——验收项形同虚设。
+   */
+  const acceptanceItems = body => {
+    const text = String(body ?? "");
+    const section = text.match(/##\s*验收[^\n]*\n([\s\S]*?)(?=\n##\s|$)/);
+    const scope = section ? section[1] : text;
+    return [...scope.matchAll(/^\s*[-*]\s*\[[ xX]\]\s*(.+)$/gm)].map(m => m[1].trim()).filter(Boolean);
+  };
+  /** 把验收清单拼成 reviewer prompt 里的一段强制核对要求。 */
+  const acceptanceBlock = target => {
+    const items = acceptanceItems(target?.body);
+    if (!items.length) return "";
+    return [
+      `Issue #${target.number} 的验收清单（逐项判定，不得跳过）：`,
+      ...items.map((t, i) => `${i + 1}. ${t}`),
+      "",
+      "对每一项给出：通过 / 未通过 / 无法验证，并指明证据（文件路径、测试名、命令输出）。",
+      "任何一项未通过或无法验证，必须 approved=false，并在 findings 里列出该项。",
+    ].join("\n");
+  };
     // 策略文件必须进上下文：只把路径列在 AGENTS.md 里等于没写规则。
     const devPolicies = await loadRolePolicies("developer");
     const reviewPolicies = await loadRolePolicies("reviewer");
@@ -480,7 +504,7 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
             // 延时申请：慢命令（cargo test/build 等）由白名单判定，命中才抬高 idle 预算。
             idleExtensionSeconds: policy.timeouts?.idleExtensionSeconds,
             slowCommandPrefixes: policy.idleSlowCommands,
-            prompt: `${reviewRole}\n\n${mainDocs}\n\n${reviewPolicies}\n\nReview the staged diff versus HEAD for Issue #${issue.number}: ${issue.title}. Do not edit files.${state.lastReview ? "\n\nPREVIOUS REVIEW FINDINGS (unresolved until proven otherwise; verify each one against the current tree):\n" + state.lastReview + "\nRequirement: your SOXU_REVIEW_RESULT must include a findings array, one entry per item above, each {\"item\": \"...\", \"status\": \"resolved\" or \"unresolved\", \"evidence\": \"...\"}. Approving while any item is missing or unresolved is not allowed." : ""}\nUse git diff --cached to read the implementation.\nReturn only the required SOXU_REVIEW_RESULT JSON marker on its own final line.`, signal }); reviewerActivity.finish(true); }
+            prompt: `${reviewRole}\n\n${mainDocs}\n\n${reviewPolicies}\n\n${acceptanceBlock(issue)}\n\nReview the staged diff versus HEAD for Issue #${issue.number}: ${issue.title}. Do not edit files.${state.lastReview ? "\n\nPREVIOUS REVIEW FINDINGS (unresolved until proven otherwise; verify each one against the current tree):\n" + state.lastReview + "\nRequirement: your SOXU_REVIEW_RESULT must include a findings array, one entry per item above, each {\"item\": \"...\", \"status\": \"resolved\" or \"unresolved\", \"evidence\": \"...\"}. Approving while any item is missing or unresolved is not allowed." : ""}\nUse git diff --cached to read the implementation.\nReturn only the required SOXU_REVIEW_RESULT JSON marker on its own final line.`, signal }); reviewerActivity.finish(true); }
           catch (error) { reviewerActivity.finish(false); throw error; }
           await inspectChanges(wt.directory, state.base, policy);
           const postReviewTree = await git(["write-tree"], wt.directory);
