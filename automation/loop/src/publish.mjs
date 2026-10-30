@@ -8,6 +8,20 @@ const git = async (execute, ...args) => (await execute("git", args, { cwd: ROOT,
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const pkgVersion = async () => JSON.parse(await readFile(join(ROOT, "package.json"), "utf8")).version;
 
+/** 只认 [package] 段里的 version，避免命中依赖表里的同名键。 */
+function cargoPackageVersion(text) {
+  let inPackage = false;
+  for (const raw of String(text).split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    if (line.startsWith("[")) { inPackage = line.replace(/\s+/g, "") === "[package]"; continue; }
+    if (!inPackage) continue;
+    const match = /^version\s*=\s*"([^"]*)"/.exec(line);
+    if (match) return match[1];
+  }
+  return null;
+}
+
 /** 轮询直到 fn 返回真值；超时抛出可诊断的错误，绝不静默继续。 */
 async function waitUntil(fn, { deadline, intervalMs, label }) {
   let last = null;
@@ -59,16 +73,49 @@ async function assertCiGreen({ execute, branch, sha, timeoutMs = 20 * 60_000, in
   }, { deadline: Date.now() + timeoutMs, intervalMs, label: "CI on " + branch });
 }
 
-/** 以 release 分支上的提交为准读取版本，避免本地检出过期导致打错 tag。 */
-async function releaseVersion(execute, sha) {
-  const remote = async path => JSON.parse((await execute("git", ["show", sha + ":" + path], { cwd: ROOT, timeoutMs: 30_000 })).stdout);
-  const pkg = await remote("package.json");
-  if (!/^0\.\d+\.\d+$/.test(String(pkg.version))) throw fail("invalid-version", 409, { actual: pkg.version });
-  for (const file of ["apps/desktop/package.json", "apps/desktop/src-tauri/tauri.conf.json"]) {
-    const json = await remote(file);
-    if (json.version !== pkg.version) throw fail("version-mismatch-" + file, 409, { expected: pkg.version, actual: json.version });
+// 版本号必须在这些清单里完全一致，否则打出的 tag 与产物版本不符。
+const MANIFESTS = [
+  "package.json",
+  "apps/desktop/package.json",
+  "apps/desktop/src-tauri/tauri.conf.json",
+  "apps/desktop/src-tauri/Cargo.toml",
+];
+
+async function manifestVersion(execute, sha, path) {
+  const text = (await execute("git", ["show", sha + ":" + path], { cwd: ROOT, timeoutMs: 30_000 })).stdout;
+  if (path.endsWith(".toml")) {
+    const version = cargoPackageVersion(text);
+    if (!version) throw fail("missing-version-" + path, 409);
+    return version;
   }
-  return pkg.version;
+  return JSON.parse(text).version;
+}
+
+/**
+ * 以目标提交（而不是本地检出）为准读取版本：本地 HEAD 可能落后于集成分支，
+ * 用本地版本会打出与构建内容不匹配的 tag。
+ */
+async function releaseVersion(execute, sha) {
+  const expected = await manifestVersion(execute, sha, MANIFESTS[0]);
+  if (!/^0\.\d+\.\d+$/.test(String(expected))) throw fail("invalid-version", 409, { actual: expected });
+  for (const file of MANIFESTS.slice(1)) {
+    const actual = await manifestVersion(execute, sha, file);
+    if (actual !== expected) throw fail("version-mismatch-" + file, 409, { expected, actual });
+  }
+  return expected;
+}
+
+/**
+ * gh pr merge 只改远端，不会更新本地 remote-tracking ref；不刷新就会把 tag 打在
+ * 合并前的 main 上（CI 校验也会因为旧 sha 恰好是绿的而放行）。这里显式 fetch
+ * 并等引用前进，等不到就失败，绝不静默使用旧 sha。
+ */
+async function refreshRemoteRef(execute, branch, { previous = null, deadline, intervalMs }) {
+  return waitUntil(async () => {
+    await execute("git", ["fetch", "--quiet", "origin", "+refs/heads/" + branch + ":refs/remotes/origin/" + branch], { cwd: ROOT, timeoutMs: 60_000 });
+    const sha = await git(execute, "rev-parse", "refs/remotes/origin/" + branch);
+    return previous && sha === previous ? null : sha;
+  }, { deadline, intervalMs, label: "origin/" + branch + " to advance" });
 }
 
 /**
@@ -101,7 +148,9 @@ export async function publishRelease({ execute = run, timeoutMs = 20 * 60_000, i
     await execute("gh", ["pr", "merge", String(number), "--merge"], { cwd: ROOT, timeoutMs: 60_000 });
     merge = "merged-via-pr#" + number;
   }
-  const releaseSha = await git(execute, "rev-parse", "refs/remotes/origin/" + status.releaseBranch);
+  const releaseSha = merge === "already-merged"
+    ? status.releaseTip
+    : await refreshRemoteRef(execute, status.releaseBranch, { previous: status.releaseTip, deadline, intervalMs });
   const version = await releaseVersion(execute, releaseSha);
   await assertCiGreen({ execute, branch: status.releaseBranch, sha: releaseSha, timeoutMs, intervalMs });
   const tag = "v" + version;
@@ -119,8 +168,9 @@ export async function publishRelease({ execute = run, timeoutMs = 20 * 60_000, i
 export async function publishPreview({ execute = run, version = null, timeoutMs = 10 * 60_000, intervalMs = 15_000 } = {}) {
   const status = await publishStatus({ execute });
   if (status.error) throw fail(status.error, 409);
-  const base = version ?? status.version;
-  if (!/^0\.\d+\.\d+$/.test(base)) throw fail("invalid-version", 400);
+  // 版本取自集成分支的提交；本地检出可能落后于 dev tip。
+  const base = await releaseVersion(execute, status.integrationTip);
+  if (version !== null && version !== base) throw fail("version-argument-mismatch", 409, { expected: base, actual: version });
   await assertCiGreen({ execute, branch: status.integrationBranch, sha: status.integrationTip, timeoutMs, intervalMs });
   const existing = await git(execute, "tag", "--list", "v" + base + "-rc.*");
   const next = existing.split(/\r?\n/).filter(Boolean).length + 1;
