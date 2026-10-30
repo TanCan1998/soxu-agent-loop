@@ -1934,6 +1934,22 @@ document.addEventListener("click", event => {
   if (event?.target?.closest?.(".flip-wrap")) return;
   $("publishMenu").hidden = true;
 });
+/* 发布失败大多是英文错误码，直接抛给用户看不懂。 */
+const PUBLISH_ERRORS = [
+  ["external-runner-active", "有外部 Runner 正在这个仓库上运行，先停止它再发布"],
+  ["runner-busy", "控制台还有任务在跑，等它结束或安全停止后再发布"],
+  ["tag-exists", "该版本的 tag 已存在，先提升版本号再发布"],
+  ["pr-not-clean-", "dev→main 的 PR 没能通过检查（合并状态不是 CLEAN），先处理冲突或分支保护"],
+  ["ci-not-successful-on-", "目标分支上的 CI 没有成功，发布已中止"],
+  ["timeout-waiting-for-", "等待超时（CI、PR 检查或分支推进），发布已中止，可稍后重试"],
+  ["version-mismatch-", "版本号在不同清单之间不一致，先统一 package.json 与 tauri/Cargo 清单"],
+  ["invalid-version", "版本号格式必须是 0.x.y"],
+];
+function publishErrorText(message) {
+  const code = String(message ?? "");
+  const hit = PUBLISH_ERRORS.find(([prefix]) => code.startsWith(prefix));
+  return hit ? hit[1] + "（" + code + "）" : code;
+}
 for (const [id, mode] of [["publishPreview", "preview"], ["publishRelease", "release"]]) {
   $(id).addEventListener("click", async () => {
     if (!connected) return notice("先连接本地控制台。");
@@ -1949,7 +1965,7 @@ for (const [id, mode] of [["publishPreview", "preview"], ["publishRelease", "rel
       const result = await api("/api/publish", { method: "POST", body: { mode } });
       notice("发布完成：" + result.status + " · " + (result.tag ?? "") + (result.merge ? " · " + result.merge : ""));
       await refresh();
-    } catch (error) { notice("发布失败：" + error.message); }
+    } catch (error) { notice("发布失败：" + publishErrorText(error.message)); }
     finally { buttonBusy(button, false); }
   });
 }
