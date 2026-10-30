@@ -55,9 +55,14 @@ function stopTree(child, hard = false) {
   }
 }
 
-export function piArgv(modelSelection, readOnly = false, intakeReadTools = false) {
+export function piArgv(modelSelection, readOnly = false, intakeReadTools = false, webResearch = false) {
   if (intakeReadTools && !readOnly) throw new Error("Intake tools require the read-only profile");
-  const profile = intakeReadTools
+  if (webResearch && !readOnly) throw new Error("Web research requires the read-only profile");
+  // webResearch：只读仓库工具 + 联网调研。不禁 extensions（web 工具由扩展提供），
+  // 但用 --tools 白名单把可调用范围钉死在这六个工具上。
+  const profile = webResearch
+    ? ["--tools", "read,grep,find,ls,web_search,fetch_content", "--no-mcp", "--no-session", "--no-skills", "--no-prompt-templates", "--no-context-files"]
+    : intakeReadTools
     ? ["--tools", "read,grep,find,ls", "--no-extensions", "--no-mcp", "--no-session", "--no-skills", "--no-prompt-templates", "--no-context-files"]
     : readOnly ? ["--no-tools", "--no-extensions", "--no-mcp", "--no-session"] : [];
   return ["--mode", "rpc", ...profile, ...modelArgs(modelSelection)];
@@ -77,7 +82,7 @@ export function resolvePiTimeouts({ timeoutMs, timeouts = {} } = {}) {
  * the idle window but never the hard deadline. Quota/network errors are returned
  * to the coordinator; this function never automatically replays a paid prompt.
  */
-export async function runPi({ cwd, prompt, timeoutMs, timeouts, onEvent = () => {}, signal, modelSelection, readOnly = false, intakeReadTools = false,
+export async function runPi({ cwd, prompt, timeoutMs, timeouts, onEvent = () => {}, signal, modelSelection, readOnly = false, intakeReadTools = false, webResearch = false,
   idleExtensionSeconds = IDLE_EXTENSION_DEFAULT_SECONDS, slowCommandPrefixes = SLOW_COMMAND_DEFAULTS } = {}) {
   const extensionSeconds = idleExtensionSeconds;
   const prefixes = slowCommandPrefixes;
@@ -85,7 +90,7 @@ export async function runPi({ cwd, prompt, timeoutMs, timeouts, onEvent = () => 
   const binary = process.env.SOXU_PI_BIN || "pi";
   const win = process.platform === "win32";
   if (win && !/^[a-zA-Z0-9_-]+$/.test(binary)) throw new Error("SOXU_PI_BIN on Windows must be a safe executable name");
-  const argv = piArgv(modelSelection, readOnly, intakeReadTools);
+  const argv = piArgv(modelSelection, readOnly, intakeReadTools, webResearch);
   // Windows .cmd resolution requires cmd.exe; identifiers are strictly validated above.
   const child = spawn(win ? "cmd.exe" : binary, win ? ["/d", "/s", "/c", `${binary} ${argv.join(" ")}`] : argv, {
     cwd, env: safeEnvironment(), windowsHide: true, detached: !win, stdio: ["pipe", "pipe", "pipe"]

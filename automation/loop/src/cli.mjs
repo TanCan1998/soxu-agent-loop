@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { run, git } from "./process.mjs";
 import { processIssue } from "./worker.mjs";
 import { seedIssues, listIssues, processAuthorizedReleases } from "./github.mjs";
-import { listPaused, readCheckpoint } from "./checkpoint.mjs";
+import { listPaused, readCheckpoint, writeCheckpoint } from "./checkpoint.mjs";
 import { recoverFromSentence } from "./recovery.mjs";
 import { interruptibleWait } from "./interruptible-wait.mjs";
 import { loadRoleModels } from "./agent-models.mjs";
@@ -135,6 +135,33 @@ async function doctor() {
   console.log("  paused or interrupted tasks:", (await listPaused()).map(x => `#${x.issue.number} (${x.status}: ${x.phase})`).join(", ") || "none");
 }
 async function cleanup() { try { return await cleanupMergedTasks(ROOT,{signal:controller.signal, base: await integrationBase()}); } catch { console.warn("Merged cleanup unavailable; retry on the next run."); return [{status:"error"}]; } }
+
+/**
+ * 清理脏状态：runner 被强制终止（kill -9、断电、面板强制关闭）时，
+ * checkpoint 会停在 status=running，但实际没有进程在跑。
+ * 后果是面板显示"执行中"、任务却永远不会推进，只能人工改 JSON。
+ *
+ * 判断依据：本进程正在启动（说明之前的 runner 已经退出），
+ * 此时任何 running 的 checkpoint 都是脏的。
+ */
+async function clearStaleRunning() {
+  let candidates;
+  try { candidates = await listPaused(undefined, { includeBlocked: true }); }
+  catch { return; }
+  for (const state of candidates) {
+    if (state.status !== "running") continue;
+    const previousPhase = state.phase ?? "unknown";
+    state.status = "paused";
+    state.reason = "stale-running";
+    state.lastError = "checkpoint 停在 running 但没有活跃 runner（进程被强制终止）；启动时自动改为 paused，可安全恢复";
+    try {
+      await writeCheckpoint(state);
+      console.log(`Cleared stale running state for #${state.issue?.number ?? "?"} (phase ${previousPhase})`);
+    } catch (error) {
+      console.warn(`Unable to clear stale running state for #${state.issue?.number ?? "?"}: ${safeFailureMessage(error, 200)}`);
+    }
+  }
+}
 async function once() {
   if (!local && !dryRun) await cleanup();
   if (!dryRun) await verifyLockfiles();
@@ -179,6 +206,7 @@ const problematic = results => results.some(x => x.status === "paused" || x.stat
  * batch. Both paths stay in one subprocess so two runners never race worktrees.
  */
 async function start() {
+  if (!dryRun) await clearStaleRunning();
   const candidates = (await listPaused(undefined, { includeBlocked: true })).filter(s => local ? s.local : !s.local);
   // blocked 任务自动重试，但有界：超过上限就不再抢占队列，新任务可以继续。
   const { actionable, exhausted } = partitionRecoveryCandidates(candidates, p.maxBlockedRecoveries ?? 2);
@@ -294,6 +322,8 @@ switch (command) {
   }
   case "loop": {
     if (!dryRun) await verifyLockfiles();
+    // 启动即代表上一个 runner 已退出：残留的 running 状态都是脏的。
+    if (!dryRun) await clearStaleRunning();
     if (!local && !dryRun) await cleanup();
     // 被中断的任务是 agent:paused，不在 ready 队列里；不先恢复的话，
     // 面板上的「运行」永远推不动它们（历史缺陷：面板显示运行中，实际全卡 paused）。
