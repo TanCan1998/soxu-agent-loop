@@ -214,5 +214,75 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
     } catch(e) {results.push({issue:n,status:"error"});log(`Merged cleanup #${n} could not be completed; the next run will retry.`);}
     finally {await rm(lock,{force:true});}
   }
+  // 第二遍：孤儿任务归档。
+  //
+  // 上面的循环以 checkpoint 为入口，所以任务文件归档依赖 checkpoint 存在。
+  // checkpoint 一旦被人工删除（或从未生成），任务就永远留在 tasks/backlog，
+  // 即使 issue 早已关闭、PR 早已合并 —— 依赖检查看 tasks/done，于是后续
+  // 依赖它的需求永远无法设为就绪。
+  //
+  // 这里直接扫 tasks/backlog：有 githubIssue 字段、issue 已关闭、且有 merged PR
+  // 引用它的任务，一律归档。与 checkpoint 生命周期彻底解耦。
+  try {
+    const orphaned = await archiveOrphanTasks(root, execAtRoot, log, signal);
+    if (orphaned.length) results.push({ status: "archived-orphans", tasks: orphaned });
+  } catch (error) {
+    log("Orphan task archival failed; will retry next run: " + (error?.message ?? error));
+  }
   return results;
+}
+
+/**
+ * 从候选里挑出可归档的：issue 已关闭 **且** 有 merged PR 引用它。
+ *
+ * 两个条件都要，缺一不可：
+ *   - 只看 issue 关闭会误伤「手动关闭但没合入」的（#135 的教训：有人关 issue 不代表做完了）
+ *   - 只看 merged PR 会漏掉 issue 还没被关的中间态
+ *
+ * 抽成纯函数是为了能不碰 git 就测这个判定。
+ */
+export function selectOrphanTasks(candidates, closed, merged) {
+  return candidates.filter(c => closed.has(c.issue) && merged.has(c.issue));
+}
+
+/**
+ * 归档「issue 已关闭且有合入记录」但仍留在 tasks/backlog 的任务。
+ *
+ * 与 archiveTaskFile 的区别：后者靠 checkpoint 找到任务，这里靠任务自带的
+ * githubIssue 字段反查。两者互补，覆盖「checkpoint 已删但任务没归档」的情况。
+ */
+async function archiveOrphanTasks(root, exec, log, signal) {
+  const backlog = join(root, "tasks", "backlog");
+  let files;
+  try { files = await readdir(backlog); } catch { return []; }
+  const candidates = [];
+  for (const name of files) {
+    if (!/^TASK-\d+\.md$/.test(name)) continue;
+    try {
+      const text = await readFile(join(backlog, name), "utf8");
+      const m = text.match(/^githubIssue:\s*(\d+)$/m);
+      if (m) candidates.push({ taskId: name.slice(0, -3), issue: Number(m[1]) });
+    } catch { /* 跳过不可读文件 */ }
+  }
+  if (!candidates.length) return [];
+  // 一次拉全量，避免逐个 issue / PR 查询。
+  const issues = JSON.parse((await exec("gh",
+    ["issue", "list", "--state", "all", "--limit", "1000", "--json", "number,state"])).stdout ?? "[]");
+  const closed = new Set(issues.filter(i => i.state === "CLOSED").map(i => i.number));
+  const merged = new Set();
+  const prs = JSON.parse((await exec("gh",
+    ["pr", "list", "--state", "merged", "--limit", "1000", "--json", "body"])).stdout ?? "[]");
+  const re = /(?:^|\n)\s*(?:closes|closed|close|fixes|fixed|fix|resolves|resolved|resolve)\s+#(\d+)\b/gim;
+  for (const pr of prs) for (const m of String(pr.body ?? "").matchAll(re)) merged.add(Number(m[1]));
+  const done = [];
+  for (const c of selectOrphanTasks(candidates, closed, merged)) {
+    if (signal?.aborted) break;
+    await exec("git", ["mv", `tasks/backlog/${c.taskId}.md`, `tasks/done/${c.taskId}.md`], { cwd: root });
+    done.push(c.taskId);
+  }
+  if (done.length) {
+    await exec("git", ["commit", "-m", `🔧 chore(tasks): 归档 ${done.length} 个已完成任务（孤儿扫描）`], { cwd: root });
+    log(`Archived ${done.length} orphan task(s): ${done.join(", ")}`);
+  }
+  return done;
 }
