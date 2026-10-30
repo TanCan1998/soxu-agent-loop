@@ -21,6 +21,38 @@ test("unmerged, changed PR head and active lock preserve everything",()=>fixture
 test("remote ref advanced after merge is not deleted and local copy is preserved",()=>fixture(async x=>{await writeFile(join(x.wt,"change"),"more");await x.git(["add","change"],x.wt);await x.git(["commit","-m","new"],x.wt);await x.git(["push","origin",x.branch],x.wt);const [r]=await x.clean();assert.equal(r.remote,"changed");await access(x.wt);}));
 test("manually removed worktree and refs are recorded as cleaned",()=>fixture(async x=>{await x.git(["worktree","remove",x.wt]);await x.git(["branch","-D",x.branch]);await x.git(["push","origin",`:${x.branch}`]);const [r]=await x.clean();assert.equal(r.status,"cleaned");assert.equal(r.local,"absent");assert.equal(r.remote,"absent");assert.deepEqual(await x.clean(),[]);}));
 
+test("auto-closed issue (Closes #N) still gets stale agent labels cleared, once", async () => {
+  const root = await mkdtemp(join(tmpdir(), "soxu-cleanup-relabel-"));
+  try {
+    const checkpointDir = join(root, ".soxu", "checkpoints");
+    const state = {
+      issue: { number: 90 }, local: false, status: "done", phase: "done",
+      branch: "agent/github-issue-90-m1-task-019", commit: "b".repeat(40),
+      pr: "https://github.com/a/b/pull/91",
+      directory: join(root, "..", "soxu-worktrees", "github-issue-90-m1-task-019"),
+      cleanup: { complete: true, remote: "absent", local: "absent", checkedAt: new Date().toISOString() },
+    };
+    await writeCheckpoint(state, checkpointDir);
+    const calls = [];
+    let closed = true;
+    const execute = async (bin, args) => {
+      calls.push(bin + " " + args.join(" "));
+      if (args[0] === "issue" && args[1] === "view") {
+        return { stdout: JSON.stringify({ state: closed ? "CLOSED" : "OPEN", labels: closed ? [{ name: "agent:blocked" }, { name: "agent:pr" }] : [] }) };
+      }
+      if (args[0] === "issue" && args[1] === "edit") { closed = true; return { stdout: "" }; }
+      if (args[0] === "issue" && args[1] === "close") throw new Error("already-closed issue must not be closed twice");
+      throw new Error("unexpected command: " + args.join(" "));
+    };
+    await cleanupMergedTasks(root, { execute, base: "dev", log: () => {} });
+    assert.ok(calls.some(c => c.startsWith("gh issue edit 90") && c.includes("--remove-label agent:blocked")), "stale labels must be removed: " + calls.join(" | "));
+    assert.ok(!calls.some(c => c.startsWith("gh issue close")), "must not close an already-closed issue");
+    calls.length = 0;
+    await cleanupMergedTasks(root, { execute, base: "dev", log: () => {} });
+    assert.equal(calls.length, 0, "cleaned terminal state is cached in the checkpoint");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("orphan archival requires BOTH a closed issue and a merged PR citing it", () => {
   const candidates = [
     { taskId: "TASK-001", issue: 101 }, // 关闭 + 有合入 → 归档
