@@ -1,8 +1,9 @@
 import { dataRoot } from "./config.mjs";
-import { open, readFile, readdir, rm, lstat, realpath, mkdir } from "node:fs/promises";
+import { open, readFile, readdir, rm, lstat, realpath, mkdir, access } from "node:fs/promises";
 import { join, resolve, relative } from "node:path";
 import { run } from "./process.mjs";
 import { readCheckpoint, writeCheckpoint } from "./checkpoint.mjs";
+import { taskIdFromIssueTitle } from "./task-catalog.mjs";
 const samePath = (a,b) => process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 
 // Cleanup is restricted to Runner-owned GitHub tasks with an exact merged PR head.
@@ -23,6 +24,47 @@ async function closeMergedIssue(exec, state, n, base) {
     return "closed";
   } catch { return "unknown"; }
 }
+/**
+ * 把任务文件从 tasks/backlog 归档到 tasks/done。
+ *
+ * 过去 cleanup 只删分支、删 worktree、关 issue，从不移动任务文件，
+ * 于是「PR 已合并」与「依赖检查读 tasks/done」长期对不上：
+ * 任务明明已经合入，依赖它的需求却仍被判为依赖缺失。
+ *
+ * 用 git mv + commit，避免留下未提交变更干扰后续 agent 的基点。
+ * 已经归档或文件不存在时静默跳过。
+ */
+async function taskIdForIssue(root, state, issueNumber) {
+  // 1. issue 标题里带 [TASK-NNN]（新任务都是这种格式）
+  const fromTitle = taskIdFromIssueTitle(state?.issue?.title ?? "");
+  if (fromTitle) return fromTitle;
+  // 2. 退回 frontmatter 里的 githubIssue 反查（早期标题没有 TASK 前缀，如 #112）
+  for (const dir of ["backlog", "done"]) {
+    let files;
+    try { files = await readdir(join(root, "tasks", dir)); } catch { continue; }
+    for (const f of files) {
+      if (!/^TASK-\d+\.md$/.test(f)) continue;
+      try {
+        const text = await readFile(join(root, "tasks", dir, f), "utf8");
+        if (new RegExp(`^githubIssue:\\s*${issueNumber}$`, "m").test(text)) return f.slice(0, -3);
+      } catch { /* 跳过不可读文件 */ }
+    }
+  }
+  return null;
+}
+
+async function archiveTaskFile(root, exec, state, issueNumber) {
+  const taskId = await taskIdForIssue(root, state, issueNumber);
+  if (!taskId) return null;
+  const from = join(root, "tasks", "backlog", taskId + ".md");
+  const to = join(root, "tasks", "done", taskId + ".md");
+  try { await access(from); } catch { return null; }
+  await mkdir(join(root, "tasks", "done"), { recursive: true });
+  await exec("git", ["mv", `tasks/backlog/${taskId}.md`, `tasks/done/${taskId}.md`], { cwd: root });
+  await exec("git", ["commit", "-m", `🔧 chore(tasks): 归档 ${taskId}（#${issueNumber} 已合并）`], { cwd: root });
+  return taskId;
+}
+
 export async function cleanupMergedTasks(root, { execute=run, log=console.log, signal, base = "main" }={}) {
   const checkpointDir=join(dataRoot(root),"checkpoints"), lockDir=join(root,".soxu","locks");
   let files;try { files=await readdir(checkpointDir); } catch(e) {if(e.code==="ENOENT")return [];throw e;}
@@ -35,6 +77,10 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
     if(!state || state.local) continue;
     // 已清理完成的检查点不再做 git 工作，但仍要补齐"关闭 Issue"这一步（之前因此漏关）。
     if(state.status==="done" && state.phase==="done" && state.cleanup?.complete) {
+      // 历史 checkpoint 可能已经 cleanup.complete 但任务文件还留在 backlog，
+      // 这里补一次归档（archiveTaskFile 内部幂等）
+      try { await archiveTaskFile(root, execAtRoot, state, Number(id)); }
+      catch (e) { log(`Merged cleanup #${id}: 任务文件归档失败（${e?.message ?? e}），下次重试。`); }
       if(await closeMergedIssue(execAtRoot, state, Number(id), base) === "closed") await writeCheckpoint(state, checkpointDir);
       continue;
     }
@@ -148,7 +194,11 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
       const complete=["absent","deleted"].includes(remoteStatus) && ["absent","deleted"].includes(localStatus);
       fresh.cleanup={complete,remote:remoteStatus,local:localStatus,checkedAt:new Date().toISOString()};await writeCheckpoint(fresh,checkpointDir);
       const result={issue:n,status:complete?"cleaned":"preserved",remote:remoteStatus,local:localStatus};
-      if(complete) result.issueClosed=await closeMergedIssue(exec, fresh, n, base);
+      if(complete) {
+      try { result.archivedTask = await archiveTaskFile(root, exec, fresh, n); }
+      catch (e) { log(`Merged cleanup #${n}: 任务文件归档失败（${e?.message ?? e}），下次重试。`); }
+      result.issueClosed = await closeMergedIssue(exec, fresh, n, base);
+    }
       results.push(result);
       log(`Merged cleanup #${n}: remote=${remoteStatus}, local=${localStatus}`);
     } catch(e) {results.push({issue:n,status:"error"});log(`Merged cleanup #${n} could not be completed; the next run will retry.`);}
