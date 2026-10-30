@@ -954,3 +954,35 @@ body.dragging-draft .queue-item{cursor:grabbing}
 .report-title strong { order: 2; }
 .report-title .confidence-badge { order: 1; }
 
+
+/* ── 临时提示 toast ──
+   所有 notice() 反馈都走这里。之前写进 #notice（静态说明文字，宽高 0），
+   用户看不到任何反馈，表现为按钮点了没反应。 */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translate(-50%, 12px);
+  z-index: 2147483001;
+  max-width: min(560px, calc(100vw - 40px));
+  padding: 10px 18px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  background: color-mix(in srgb, var(--panel) 92%, var(--accent));
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  box-shadow: 0 12px 32px -10px rgba(0, 0, 0, .7);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .22s ease, transform .22s cubic-bezier(.16,.84,.34,1);
+  text-align: center;
+}
+.toast[data-show="1"] {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+@media (pointer: coarse) {
+  .toast { bottom: 20px; font-size: 13.5px; padding: 12px 18px; }
+}
+

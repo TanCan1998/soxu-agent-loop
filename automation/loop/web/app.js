@@ -63,7 +63,30 @@ function forgetToken(token) {
     try { if (storage.getItem(TOKEN_STORAGE_KEY) === token) storage.removeItem(TOKEN_STORAGE_KEY); } catch {}
   }
 }
-function notice(message) { $("notice").textContent = message; $("authNotice").textContent = message; }
+/**
+ * 临时提示。
+ *
+ * 过去只写进 #notice —— 那是页面上的一段静态说明文字（宽高为 0，被折叠在面板里），
+ * 于是「已复制到剪贴板」「报告还没加载完成」这类反馈用户根本看不到，
+ * 看起来就像按钮没反应。现在写进真正的 toast。
+ * #authNotice 仍然更新，因为连接失败时需要在连接卡片里看到原因。
+ */
+let toastTimer = null;
+function notice(message) {
+  const toast = $("toast");
+  if (toast) {
+    toast.textContent = message;
+    toast.dataset.show = "1";
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toast.dataset.show = "0"; }, 3600);
+  } else {
+    // 测试桩与旧结构没有 #toast，退回写 #notice 保持行为可断言
+    const legacy = $("notice");
+    if (legacy) legacy.textContent = message;
+  }
+  const auth = $("authNotice");
+  if (auth) auth.textContent = message;
+}
 /**
  * 统一确认弹窗：替代浏览器原生 await askConfirm()/await askText()，避免阻塞式弹窗与样式割裂。
  * 返回 Promise，调用方必须 await。
@@ -962,12 +985,12 @@ function legacyCopy(text) {
   if (!document.body) return false;
   const area = document.createElement("textarea");
   area.value = text;
-  area.setAttribute("readonly", "");
-  area.style.position = "fixed";
-  area.style.top = "-1000px";
+  // 不设 readonly：部分 Android WebView 对 readonly 文本域拒绝 select()。
+  // 不移出视口：某些浏览器认为不可见元素不可选中，用 1px + opacity:0 留在原位。
+  area.style.cssText = "position:fixed;left:0;bottom:0;width:1px;height:1px;opacity:0;padding:0;border:0;outline:0;background:transparent;";
   document.body.appendChild(area);
   try {
-    area.focus?.();
+    area.focus?.({ preventScroll: true });
     area.select?.();
     area.setSelectionRange?.(0, text.length);
     return Boolean(document.execCommand?.("copy"));
