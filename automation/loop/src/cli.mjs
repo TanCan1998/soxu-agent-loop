@@ -48,6 +48,8 @@ Commands:
   watch        Poll GitHub tasks (bounded by policy; no --local or --dry-run)
   say          Execute a natural-language recovery instruction
   update       Fast-forward the tool checkout (hot update); add --check to only compare
+  pid-register Register a long-running pid for this task (--pid, optional --command)
+  pid-sweep    Reclaim the pids registered for this task (--key or SOXU_TASK_KEY)
   help         Show this help
 
 Options:
@@ -73,6 +75,24 @@ if (command === "help" || command === "-h" || command === "--help" || args.inclu
 }
 const local = args.includes("--local"), githubOnly = args.includes("--github"), dryRun = args.includes("--dry-run");
 if (local && githubOnly) throw new Error("--local and --github cannot be combined");
+// 长驻进程登记：Agent 用后台方式启动的服务会脱离 Pi 的进程树，只能靠登记表回收。
+if (command === "pid-register" || command === "pid-sweep") {
+  const { registerProcess, sweepProcesses } = await import("./process-registry.mjs");
+  const flag = name => { const index = args.indexOf(name); return index >= 0 ? args[index + 1] : undefined; };
+  const key = flag("--key") ?? process.env.SOXU_TASK_KEY;
+  if (!key) throw new Error("pid-register / pid-sweep need --key or SOXU_TASK_KEY");
+  if (command === "pid-sweep") {
+    const result = await sweepProcesses({ root: ROOT, key });
+    console.log(`killed=${result.killed.length ? result.killed.join(",") : "-"} skipped=${result.skipped.length} pruned=${result.pruned}`);
+    process.exit(0);
+  }
+  const pid = Number(flag("--pid"));
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error("--pid must be a positive integer");
+  const entry = await registerProcess({ root: ROOT, key, pid, command: flag("--command") ?? "" });
+  console.log(`registered pid ${entry.pid} for ${key}${entry.command ? " :: " + entry.command.slice(0, 80) : ""}`);
+  process.exit(0);
+}
+
 const p = await loadPolicy();
 // Only a dashboard-owned child receives an explicit, session-scoped override.
 if (typeof process.send === "function" && ["0", "1"].includes(process.env.SOXU_DASHBOARD_AUTO_MERGE))
