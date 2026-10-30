@@ -344,8 +344,6 @@ function lostAuthorization(token) {
   tokenInput.value = "";
   connected = false;
   $("authPanel").hidden = false; $("connect").textContent = "连接";
-  $("dot").classList.remove("ok");
-  $("connection").textContent = "未连接";
   $("globalRun").dataset.status="unknown"; $("globalRun").textContent="未连接";
   disableControls();
   stopStream();
@@ -645,9 +643,11 @@ function renderPhaseTasks(data) {
   if (list.length > 8) host.append(element("span", "+" + (list.length - 8) + " 项", "subtle"));
 }
 function renderProjectPhase(github, data) {
-  const names={M0:"工程治理",M1:"产品原型",M2:"多 Agent",M3:"开发工具",M4:"交付发布"};
   // GitHub 不可用时退回本地检查点推出的路线图，避免整块变成"待核实"。
   const roadmap=github?.status === "ok" ? github.tasks?.__roadmap : (data.roadmap ?? null);
+  // 里程碑名称由后端返回（roadmap.stages[].name）；这里只做兜底，
+  // 未登记的 M 级直接显示 id，不再有「未归类」这一档。
+  const names=Object.fromEntries((roadmap?.stages ?? []).map(s=>[s.id,s.name]));
   const key=JSON.stringify([roadmap,Boolean(data.runner),data.taskPhases]);
   if(key===lastRoadmapKey)return;
   lastRoadmapKey=key;
@@ -663,10 +663,10 @@ function renderProjectPhase(github, data) {
     if(!unknown){total+=stage.total;merged+=stage.merged;}
     const card=element("article",undefined,"milestone-card");card.dataset.status=state;
     card.setAttribute("role","button");card.setAttribute("tabindex","0");card.setAttribute("aria-label",id+" · "+names[id]+"，查看任务明细");
-    const show=()=>showMilestoneDetail(id,names[id],stage,Boolean(roadmap?.limited),roadmap?.source);
+    const show=()=>showMilestoneDetail(id,names[id] ?? id,stage,Boolean(roadmap?.limited),roadmap?.source);
     card.addEventListener("click",show);card.addEventListener("keydown",event=>{if(event.key==="Enter" || event.key===" "){event.preventDefault();show();}});
     const labels={unknown:"待核实",running:"进行中",paused:"暂停 / 阻塞",completed:"任务已合入 · 验收待确认",waiting:"等待推进"};
-    const head=element("div",undefined,"milestone-heading");head.append(element("strong",id+" · "+names[id]),element("span",labels[state],"milestone-state"));card.append(head);
+    const head=element("div",undefined,"milestone-heading");head.append(element("strong",id+" · "+(names[id] ?? id)),element("span",labels[state],"milestone-state"));card.append(head);
     const track=element("div",undefined,"milestone-track"), fill=element("span",undefined,"milestone-fill");
     track.setAttribute("role","progressbar");track.setAttribute("aria-label",id+" 已归类任务的合入进度");
     if(!unknown){track.setAttribute("aria-valuemin","0");track.setAttribute("aria-valuemax",String(stage.total));track.setAttribute("aria-valuenow",String(stage.merged));fill.style.width=`${stage.merged/stage.total*100}%`;}
@@ -686,8 +686,6 @@ function render(data) {
   if (typeof data.instanceId === "string") resetInstance(data.instanceId);
   connected = true;
   $("authPanel").hidden = true;
-  $("dot").classList.add("ok");
-  $("connection").textContent = "本机已连接";
   const tasks = data.tasks || [];
   for (const group of ["running", "pending", "done"]) $(group).textContent = tasks.filter(t => t.status === group).length;
   $("total").textContent = tasks.length;
@@ -779,8 +777,6 @@ async function refresh() {
     } else {
       connected = false;
       $("authPanel").hidden = false;
-      $("dot").classList.remove("ok");
-      $("connection").textContent = "连接中断";
       $("globalRun").dataset.status="unknown"; $("globalRun").textContent="状态未知";
       disableControls();
       notice("连接失败：" + error.message);
@@ -1682,8 +1678,6 @@ tokenInput.addEventListener("input", () => {
   stopStream();
   connected = false;
   $("authPanel").hidden = false; $("connect").textContent = "连接";
-  $("dot").classList.remove("ok");
-  $("connection").textContent = "尚未连接";
   disableControls();
 });
 for (const button of document.querySelectorAll("[data-command]"))

@@ -8,6 +8,8 @@ import { loadRoleModels } from "./agent-models.mjs";
 import { runPi } from "./rpc.mjs";
 import { run } from "./process.mjs";
 import { classifyFailure } from "./errors.mjs";
+import { MILESTONE_ID } from "./milestones.mjs";
+import { loadTaskCatalog } from "./task-catalog.mjs";
 
 function fail(message, status=400) { return Object.assign(new Error(message), {status}); }
 export function parseIntake(text) {
@@ -49,7 +51,7 @@ export function parseIntake(text) {
   for (const name of ["title","feasibility","plan","dependencies","acceptance","unknowns"]) {
     if (typeof result[name] !== "string" || !result[name].trim() || result[name].length > (name === "title" ? 120 : 3000)) throw invalid("schema");
   }
-  if (/^\s*\[(?:TASK-\d+|M[0-4])\]/i.test(result.title) || /[\r\n]/.test(result.title)) throw invalid("schema");
+  if (/^\s*\[(?:TASK-\d+|M\d+)\]/i.test(result.title) || /[\r\n]/.test(result.title)) throw invalid("schema");
   const output=Object.fromEntries(["title","feasibility","plan","dependencies","acceptance","unknowns"].map(k=>[k,result[k]]));
   if (["feasible","conditional","infeasible","unknown"].includes(result.feasibilityStatus)) output.feasibilityStatus=result.feasibilityStatus;
   if (result.questions !== undefined) {
@@ -76,6 +78,56 @@ export function dependencyIds(text) {
   return [...new Set(ids)].sort();
 }
 
+/** 分配下一个 TASK 编号：catalog 现有最大值 + 1。 */
+async function nextTaskId(root) {
+  const catalog = await loadTaskCatalog(root);
+  const nums = catalog
+    .map(t => Number(String(t.id).replace(/^TASK-/, "")))
+    .filter(n => Number.isSafeInteger(n));
+  return "TASK-" + String((nums.length ? Math.max(...nums) : 0) + 1).padStart(3, "0");
+}
+
+/**
+ * 把需求落成正式 task 文件。
+ *
+ * 过去需求队列创建的 issue 用 `[REQ-<uuid>]` 作为标识，而 dashboard 的
+ * taskIdFromIssueTitle 只认 `[TASK-NNN]`，导致这些 issue 完全不出现在
+ * 任务列表与里程碑统计里。现在提交时分配 TASK 编号并写入 catalog，
+ * 需求与任务走同一条链路。
+ */
+async function writeTaskFile(root, taskId, draft) {
+  const deps = dependencyIds(draft.assessment.dependencies);
+  const md = [
+    "---",
+    `id: ${taskId}`,
+    `milestone: ${draft.milestone}`,
+    `priority: ${draft.priority ?? "P1"}`,
+    `dependencies: [${deps.join(", ")}]`,
+    "---",
+    "",
+    `# ${draft.assessment.title}`,
+    "",
+    "## 描述",
+    "",
+    String(draft.requirement ?? "").trim(),
+    "",
+    "## 范围",
+    "",
+    String(draft.assessment.plan ?? "").trim(),
+    "",
+    "## 验收标准",
+    "",
+    String(draft.assessment.acceptance ?? "").trim(),
+    "",
+  ].join("\n");
+  const dir = join(root, "tasks", "backlog");
+  await mkdir(dir, { recursive: true });
+  const file = join(dir, taskId + ".md");
+  // wx：不覆盖已有文件，撞号时宁可报错也不静默改写别人的任务定义
+  await writeFile(file, md, { mode: 0o644, flag: "wx" });
+  return file;
+}
+
 export async function submitRequirement(root, draft, execute=run) {
   const folder=await mkdtemp(join(tmpdir(),"soxu-intake-"));
   try {
@@ -85,7 +137,11 @@ export async function submitRequirement(root, draft, execute=run) {
     const body=["## 用户需求",draft.requirement,"", "## Agent 评估（未经验证）", `### 可行性\n${draft.assessment.feasibility}`,`### 建议安排\n${draft.assessment.plan}`,`### 依赖与前置条件\n${draft.assessment.dependencies}`,`### 验收标准\n${draft.assessment.acceptance}`,`### 未知与待确认\n${draft.assessment.unknowns}`, ...(draft.answers ? ["### 用户确认", ...draft.answers.map((a,i)=>`- ${draft.confirmationQuestions?.[i]?.text ?? String(draft.assessment.unknowns).split(/\n+/).filter(Boolean)[i] ?? `问题 ${i+1}`}：${[...a.selected,a.custom].filter(Boolean).join("；")}`)] : []),"## 前置依赖（机器可读）",dependencyLine,"",`<!-- soxu-intake:${draft.id} -->`].join("\n\n");
     const path=join(folder,"issue.md"); await writeFile(path,body,{mode:0o600});
     // New unclassified requests are deliberately blocked until dependencies are reviewed.
-    const result=await execute("gh",["issue","create","--title",`[${draft.milestone ?? "未归类"}] [REQ-${draft.id}] ${draft.assessment.title}`,"--body-file",path,"--label",draft.ready ? "agent:ready" : "agent:blocked"],{cwd:root,timeoutMs:45000});
+    if (!MILESTONE_ID.test(String(draft.milestone ?? ""))) throw fail("milestone-required");
+    // 分配 TASK 编号并写入 catalog：这样 issue 才能被 dashboard 识别
+    const taskId=await nextTaskId(root);
+    await writeTaskFile(root, taskId, draft);
+    const result=await execute("gh",["issue","create","--title",`[${draft.milestone}] [${taskId}] ${draft.assessment.title}`,"--body-file",path,"--label",draft.ready ? "agent:ready" : "agent:blocked"],{cwd:root,timeoutMs:45000});
     const url=result.stdout.trim();
     if (!/^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/.test(url)) throw fail("submit-result-unknown",503);
     return url;
@@ -121,7 +177,7 @@ export class IntakeManager {
   }
   async confirm(id, ready, milestone=null) {
     await this.initialized;
-    const d=this.draft;if(milestone !== null && !/^M[0-4]$/.test(milestone)) throw fail("invalid-milestone");
+    const d=this.draft;if(milestone !== null && !MILESTONE_ID.test(milestone)) throw fail("invalid-milestone");
     if(typeof ready !== "boolean") throw fail("invalid-queue-choice");
     if(!d || d.id!==id || d.status!=="review") throw fail("assessment-not-ready",409);
     const text=JSON.stringify([d.requirement,d.assessment]);

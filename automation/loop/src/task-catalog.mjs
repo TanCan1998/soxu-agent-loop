@@ -1,4 +1,5 @@
 import { readFile, readdir } from "node:fs/promises";
+import { MILESTONE_ID, MILESTONE_IN_TITLE } from "./milestones.mjs";
 import { join } from "node:path";
 import { ROOT } from "./config.mjs";
 
@@ -31,7 +32,7 @@ export function parseTaskDocument(filename, body) {
     throw new Error(`Invalid or duplicate dependencies in ${id}`);
   }
   const milestone=meta.get("milestone") ?? null;
-  if (milestone !== null && !/^M[0-4]$/.test(milestone)) throw new Error(`Invalid milestone in ${id}`);
+  if (milestone !== null && !MILESTONE_ID.test(milestone)) throw new Error(`Invalid milestone in ${id}`);
   const title = body.match(/^#\s+(.+)$/m)?.[1];
   if (!title) throw new Error(`Missing task title: ${id}`);
   return { id, number: Number(id.slice(5)), title, body, priority, dependencies, milestone };
@@ -89,5 +90,6 @@ export function planTaskQueue(tasks, completedIds, unavailableIds = new Set()) {
 }
 
 export function taskIdFromIssueTitle(title) {
-  return /^(?:\[(?:M[0-4]|未归类)\]\s+)?\[(TASK-\d{3,})\](?:\s|$)/.exec(String(title))?.[1] ?? null;
+  const text = String(title ?? "").replace(MILESTONE_IN_TITLE, "");
+  return /^\[(TASK-\d{3,})\](?:\s|$)/.exec(text)?.[1] ?? null;
 }

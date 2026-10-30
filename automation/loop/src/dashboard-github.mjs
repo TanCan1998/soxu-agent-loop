@@ -1,5 +1,6 @@
 import { run } from "./process.mjs";
 import { loadTaskCatalog, taskIdFromIssueTitle } from "./task-catalog.mjs";
+import { MILESTONE_IN_FIELD, MILESTONE_IN_TITLE, milestoneName, stageIds } from "./milestones.mjs";
 import { mergedIssueNumbers } from "./github-queue.mjs";
 import { readQueueOrder, sortByQueueOrder } from "./queue-order.mjs";
 
@@ -55,14 +56,19 @@ export function buildGithubStatus(catalog, issues, prs, base = "main", queueOrde
       pr: pr ? {number: pr.number, title: String(pr.title ?? "").slice(0,200), url: safePrUrl(pr.url, pr.number), state: pr.mergedAt ? "merged" : pr.state === "OPEN" ? "open" : "closed", ci, ...(activeChecks.length ? {activeChecks} : {})} : null };
   }
   // Progress is derived from all explicitly classified Issues, never from a fixed task count.
-  const stages=Object.fromEntries(["M0","M1","M2","M3","M4"].map(id=>[id,{id,total:0,merged:0,running:0,paused:0,unknown:0,issues:[],items:[]}]));
+  // 里程碑集合动态：已登记的 + issue 标题/milestone 字段里实际出现的
+  const declared = issues.map(i => {
+    const fromField = MILESTONE_IN_FIELD.exec(String(i.milestone?.title ?? ""))?.[1]?.toUpperCase();
+    return fromField ?? MILESTONE_IN_TITLE.exec(String(i.title ?? ""))?.[1];
+  }).filter(Boolean);
+  const stages=Object.fromEntries(stageIds(declared).map(id=>[id,{id,name:milestoneName(id),total:0,merged:0,running:0,paused:0,unknown:0,issues:[],items:[]}]));
   const catalogById=new Map(catalog.map(t=>[t.id,t]));
   let unclassified=0;
   for (const issue of issues) {
     const id=taskIdFromIssueTitle(issue.title);
     const milestoneTitle=typeof issue.milestone?.title === "string" ? issue.milestone.title : "";
-    const fromGithub=/^(M[0-4])(?:\b|\s|\s*[-:])/i.exec(milestoneTitle)?.[1]?.toUpperCase();
-    const fromTitle=/^\[(M[0-4])\](?:\s|$)/.exec(String(issue.title ?? ""))?.[1];
+    const fromGithub=MILESTONE_IN_FIELD.exec(milestoneTitle)?.[1]?.toUpperCase();
+    const fromTitle=MILESTONE_IN_TITLE.exec(String(issue.title ?? ""))?.[1];
     const stage=fromGithub ?? fromTitle ?? catalogById.get(id)?.milestone;
     // Include classified Issues and unresolved task/Agent items; other Issues are not assumed to be project work.
     const labels=new Set((issue.labels ?? []).map(l=>l.name));

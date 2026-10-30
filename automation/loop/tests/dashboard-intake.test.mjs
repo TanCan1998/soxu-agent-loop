@@ -63,7 +63,13 @@ test("unknown submit outcome blocks repeated submission or reassessment",async()
 });
 test("submission sends exact approved body and conservative queue choice",async()=>{
   const calls=[];const execute=async(bin,args)=>{calls.push({bin,args,body:await readFile(args[args.indexOf("--body-file")+1],"utf8")});return {stdout:"https://github.com/a/b/issues/99\n"};};
-  await submitRequirement("/repo",{id:"test",requirement:"真实需求",assessment,ready:false},execute);
+  // 里程碑必填（2026-10-30）：过去默认「未归类」会让 dashboard 无法归类。
+  // submitRequirement 会写 tasks/backlog，必须给可写目录（Linux 上 /repo 不可写）
+  const tmp=await mkdtemp(join(tmpdir(),"soxu-submit-"));
+  try {
+    await assert.rejects(()=>submitRequirement(tmp,{id:"test",requirement:"真实需求",assessment,ready:false},execute),/milestone-required/);
+    await submitRequirement(tmp,{id:"test",requirement:"真实需求",assessment,ready:false,milestone:"M1"},execute);
+  } finally { await rm(tmp,{recursive:true,force:true}); }
   assert.equal(calls[0].args.at(-1),"agent:blocked");assert.match(calls[0].body,/真实需求/);
 });
 test("model response is strictly structured and cannot impersonate backlog IDs",()=>{
@@ -74,8 +80,12 @@ test("model response is strictly structured and cannot impersonate backlog IDs",
 test("confirmed requirement is classified in the chosen milestone title",async()=>{
   let args;
   const execute=async(bin,argv)=>{args=argv;return {stdout:"https://github.com/a/b/issues/99\n"};};
-  await submitRequirement("/repo",{id:"test",requirement:"需求",assessment,ready:true,milestone:"M2"},execute);
-  assert.equal(args[args.indexOf("--title")+1],"[M2] [REQ-test] 新需求");
+  const tmp2=await mkdtemp(join(tmpdir(),"soxu-submit-"));
+  try {
+    await submitRequirement(tmp2,{id:"test",requirement:"需求",assessment,ready:true,milestone:"M2"},execute);
+  } finally { await rm(tmp2,{recursive:true,force:true}); }
+  // 编号由 catalog 现有最大值 +1 决定，不硬编码
+assert.match(args[args.indexOf("--title")+1],/^\[M2\] \[TASK-\d{3}\] 新需求$/);
 });
 
 
