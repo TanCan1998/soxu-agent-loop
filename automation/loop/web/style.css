@@ -37,7 +37,7 @@ dialog{width:min(680px,calc(100vw - 30px));max-height:85vh;overflow:auto;border:
 
 .lane-action{font-size:12px;padding:7px 11px;margin-top:10px}.advisory-report{margin-top:18px;overflow-wrap:anywhere}.advisory-report .assessment-block p{white-space:pre-wrap}.advisory-report .hint{display:block}
 /* page-nav 已移至顶栏 */.page-nav button[aria-current=page]{background:var(--select);color:var(--accent);font-weight:700}.model-summary{display:grid;gap:8px}.model-summary-row{padding:10px;background:var(--subtle);border-radius:8px;overflow-wrap:anywhere}.model-groups{max-height:42vh;overflow:auto;margin:14px 0}.model-group{border:1px solid var(--border);border-radius:9px;padding:9px;margin-bottom:7px}.model-group summary{cursor:pointer;font-weight:600}.model-option{display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid var(--border)}.model-option label{margin:8px 0;overflow-wrap:anywhere;font-weight:400}.model-star{padding:4px 10px;color:var(--accent)}#modelSearch,#modelScope{background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:9px;width:100%}.agent-model{width:100%;font-size:11px;color:var(--muted)}
-.milestone-grid{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}.milestone-card{background:var(--subtle);border:1px solid var(--border);border-radius:10px;padding:12px}.milestone-heading{display:flex;justify-content:space-between;align-items:center;gap:8px}.milestone-state{font-size:11px;color:var(--muted)}.milestone-card[data-status=running]{border-color:var(--accent)}.milestone-card[data-status=running] .milestone-state{color:var(--accent)}.milestone-card[data-status=paused]{border-color:#bd7750}.milestone-card[data-status=paused] .milestone-state{color:#bd7750}.milestone-card[data-status=completed]{border-color:#31966c}.milestone-card[data-status=completed] .milestone-state{color:#31966c}.milestone-track{position:relative;overflow:hidden;height:6px;background:var(--border);border-radius:99px;margin:12px 0 6px}.milestone-fill{display:block;height:100%;background:var(--accent);border-radius:99px}.milestone-card[data-status=completed] .milestone-fill{background:#31966c}.milestone-motion{position:absolute;inset:0;background:linear-gradient(90deg,transparent,#3a83f7bb,transparent);transform:translateX(-100%);animation:soxu-flow 2s ease-in-out infinite}.milestone-motion::after{content:"";position:absolute;inset:0;background-image:radial-gradient(circle,#fff 1px,transparent 1.5px);background-size:19px 6px;opacity:.8;animation:soxu-spark 1.2s linear infinite}.task[data-status=running]{position:relative;overflow:hidden;border-color:var(--accent)}/* 任务卡按状态发光：running=accent 脉冲，paused=橙色静态微光，completed=绿色静态微光 */
+.milestone-grid{grid-column:1/-1;display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px}.milestone-card{background:var(--subtle);border:1px solid var(--border);border-radius:10px;padding:12px}.milestone-heading{display:flex;justify-content:space-between;align-items:center;gap:8px}.milestone-state{font-size:11px;color:var(--muted)}.milestone-card[data-status=running]{border-color:var(--accent)}.milestone-card[data-status=running] .milestone-state{color:var(--accent)}.milestone-card[data-status=paused]{border-color:#bd7750}.milestone-card[data-status=paused] .milestone-state{color:#bd7750}.milestone-card[data-status=completed]{border-color:#31966c}.milestone-card[data-status=completed] .milestone-state{color:#31966c}.milestone-track{position:relative;overflow:hidden;height:6px;background:var(--border);border-radius:99px;margin:12px 0 6px}.milestone-fill{display:block;height:100%;width:0;background:var(--accent);border-radius:99px;transition:width .5s cubic-bezier(.16,.84,.34,1),background-color .25s}.milestone-card[data-status=completed] .milestone-fill{background:#31966c}.milestone-motion{position:absolute;inset:0;background:linear-gradient(90deg,transparent,#3a83f7bb,transparent);transform:translateX(-100%);animation:soxu-flow 2s ease-in-out infinite}.milestone-motion::after{content:"";position:absolute;inset:0;background-image:radial-gradient(circle,#fff 1px,transparent 1.5px);background-size:19px 6px;opacity:.8;animation:soxu-spark 1.2s linear infinite}.task[data-status=running]{position:relative;overflow:hidden;border-color:var(--accent)}/* 任务卡按状态发光：running=accent 脉冲，paused=橙色静态微光，completed=绿色静态微光 */
 .task{position:relative}
 .task-motion{position:absolute;inset:0;border-radius:10px;pointer-events:none;
   box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent,#528fff) 55%,transparent),
@@ -991,7 +991,7 @@ body.dragging-draft .queue-item{cursor:grabbing}
    dialog.showModal() 把弹窗提到 top layer，那里 z-index 无效；
    普通 fixed 元素会被 dialog 与其 backdrop（含 blur）盖住。
    用 popover 让 toast 同样进入 top layer，后显示者在上。 */
-.toast[popover] {
+.toast {
   position: fixed;
   inset: auto;
   left: 50%;
@@ -1014,9 +1014,9 @@ body.dragging-draft .queue-item{cursor:grabbing}
   transition: opacity .22s ease, transform .22s cubic-bezier(.16,.84,.34,1);
 }
 .toast[popover]::backdrop { display: none; background: transparent; }
-.toast[popover][data-show="1"] { opacity: 1; transform: translate(-50%, 0); }
+.toast[data-show="1"] { opacity: 1; transform: translate(-50%, 0); }
 @media (pointer: coarse) {
-  .toast[popover] { bottom: 20px; font-size: 13.5px; padding: 12px 18px; }
+  .toast { bottom: 20px; font-size: 13.5px; padding: 12px 18px; }
 }
 
 
@@ -1039,4 +1039,47 @@ body.dragging-draft .queue-item{cursor:grabbing}
   overflow-wrap: anywhere;
 }
 .copy-fallback-text:focus { border-color: var(--accent); }
+
+
+/* ── 模型列表加载骨架 ──
+   打开配置弹窗时模型目录还在请求中，容器原本完全空白，
+   分不清是「正在加载」还是「加载失败」。 */
+.model-skeleton {
+  height: 34px;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  background: linear-gradient(
+    90deg,
+    var(--subtle) 25%,
+    color-mix(in srgb, var(--accent) 10%, var(--subtle)) 50%,
+    var(--subtle) 75%
+  );
+  background-size: 200% 100%;
+  animation: model-skeleton-shimmer 1.3s linear infinite;
+}
+.model-skeleton-hint { margin: 6px 0 0; text-align: center; }
+@keyframes model-skeleton-shimmer {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .model-skeleton { animation: none; opacity: .6; }
+}
+
+
+/* ── 进度条颜色跟随里程碑状态 ──
+   原来只有 completed 有绿色，其余一律 accent 蓝，
+   暂停 / 阻塞 / 待核实三种状态在进度条上看不出区别。 */
+.milestone-card[data-status=paused] .milestone-fill {
+  background: #bd7750;
+}
+.milestone-card[data-status=unverified] .milestone-fill {
+  background: color-mix(in srgb, var(--muted) 50%, var(--accent));
+}
+.milestone-card[data-status=waiting] .milestone-fill {
+  background: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+.milestone-card[data-status=unknown] .milestone-fill {
+  background: var(--border);
+}
 

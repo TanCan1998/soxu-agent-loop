@@ -387,6 +387,9 @@ test("large model catalog limits rendered rows and keeps search available",async
   const app=page({handler:path=>({ok:true,status:200,json:async()=>path==="/api/model-catalog"?{models}:snapshot})});
   app.elements.token.value=TOKEN;app.elements.connect.dispatch("click");await tick();
   app.elements.openModels.dispatch("click");await tick();
+  // 加载骨架只在目录请求未完成时出现；测试桩的 fetch 同步 resolve，
+  // 这里只断言最终渲染结果，骨架本身另有专门用例。
+  await tick();
   assert.equal(app.elements.modelGroups.children[0].children.length,301);
   assert.match(app.elements.modelGroups.children[1].textContent,/前 300/);
   app.elements.modelSearch.value="model-399";app.elements.modelSearch.dispatch("input");
