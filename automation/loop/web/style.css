@@ -46,7 +46,7 @@ dialog{width:min(680px,calc(100vw - 30px));max-height:85vh;overflow:auto;border:
   animation:task-glow 2.4s ease-in-out infinite}
 .task[data-status=paused] .task-motion{box-shadow:inset 0 0 0 1px #bd775088,inset 0 0 16px -6px #bd775055,0 0 14px -8px #bd775066;animation:none}
 .task[data-status=completed] .task-motion{box-shadow:inset 0 0 0 1px #31966c88,inset 0 0 16px -6px #31966c44,0 0 14px -8px #31966c55;animation:none}
-@keyframes task-glow{0%,100%{opacity:.55}50%{opacity:1}}.task[data-status=paused]{border-left:3px solid #bd7750}.task[data-status=completed]{border-left:3px solid #31966c}@keyframes soxu-flow{from{transform:translateX(-100%)}to{transform:translateX(100%)}}@keyframes soxu-spark{from{background-position:0 0}to{background-position:21px 0}}@media(prefers-reduced-motion:reduce){.milestone-motion,.milestone-motion::after,.task-motion,.task-motion::after{animation:none}}
+@keyframes task-glow{0%,100%{opacity:.55}50%{opacity:1}}@keyframes soxu-flow{from{transform:translateX(-100%)}to{transform:translateX(100%)}}@keyframes soxu-spark{from{background-position:0 0}to{background-position:21px 0}}@media(prefers-reduced-motion:reduce){.milestone-motion,.milestone-motion::after,.task-motion,.task-motion::after{animation:none}}
 
 .global-run{font-size:11px;padding:4px 9px;border-radius:99px;border:1px solid var(--border);color:var(--muted)}.global-run[data-status=running]{color:#fff;background:var(--accent);border-color:var(--accent)}.global-run[data-status=paused]{color:#bd7750;border-color:#bd7750}@media(max-width:520px){.global-run{font-size:10px;padding:3px 5px}.connection{gap:4px}}
 
@@ -220,7 +220,10 @@ dialog.closing::backdrop{animation:backdrop-out .18s ease-in forwards}
   --paper:#f2f1ee;--paper-raised:#faf9f7;--paper-sunken:#e9e8e4;
   --hero-ink:#101014;--hero-muted:#1010149e;--hero-line:#10101429;
   --hero-accent:#2d81ff;--hero-scan:#10101408;
-  --font-serif:"Instrument Serif","Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Songti SC",serif;
+  /* 中文没有可用的衬线体：Songti SC 是 macOS 字体，Windows 上会落到 serif（宋体），
+   68px 的宋体在深色背景上笔画发虚、和正文的无衬线体反差过大。
+   英文保留 Instrument Serif 的设计感，中文交给系统黑体。 */
+--font-serif:"Instrument Serif","Iowan Old Style","Palatino Linotype",Palatino,Georgia,"PingFang SC","Microsoft YaHei UI","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;
   --font-mono:"Geist Mono",ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
 }
 [data-theme="dark"]{
@@ -487,4 +490,246 @@ body.dragging-draft .queue-item{cursor:grabbing}
   .top-right { gap: 8px; }
   .global-run { padding: 4px 10px; font-size: 10px; }
 }
+
+
+/* ── 「已关闭 · 未找到合入记录」弱化 ──
+   这只是一个信息性状态，不是错误，用灰色而不是醒目的黄色。 */
+.milestone-state[data-state=unverified] { color: var(--muted); opacity: .7; font-weight: 400; }
+[data-theme="light"] .milestone-state[data-state=unverified] { color: var(--muted); opacity: .75; }
+
+/* ── 即将进行的任务：单行省略 + 总数，不滚动 ── */
+.phase-tasks {
+  flex-wrap: nowrap;
+  overflow: hidden;            /* 不再横向滚动 */
+  margin: 14px 0 10px;         /* 上下间距 */
+  gap: 6px;
+}
+.phase-tasks .phase-task-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.phase-tasks-more { flex: none; color: var(--muted); }
+.phase-tasks-total { flex: none; margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; }
+
+/* 整行只在桌面端显示 */
+@media (max-width: 900px) {
+  .phase-tasks { display: none; }
+}
+
+
+/* ── 进行中里程碑的流动光：去掉白色圆点阵列 ──
+   原实现用 radial-gradient 每 19px 铺一个白点，在深色进度条上
+   看起来像渲染噪点而不是进度反馈。只保留低透明度的流动光。 */
+.milestone-motion::after { display: none; }
+.milestone-motion {
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 55%, transparent), transparent);
+  opacity: .55;
+}
+@media (prefers-reduced-motion: reduce) {
+  .milestone-motion { animation: none !important; opacity: 0; }
+}
+
+
+/* ── 进度条动画：浅色粗斜线遮罩，从右往左流动 ──
+   只铺在 .milestone-fill 内部（已完成的左侧部分），
+   轨道右侧未完成区域保持纯背景色。
+   替代原来的 .milestone-motion 流动光（那层会盖住整条轨道）。 */
+.milestone-motion { display: none; }
+.milestone-fill {
+  position: relative;
+  overflow: hidden;
+}
+.milestone-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0 5px,
+    color-mix(in srgb, #fff 26%, transparent) 5px 10px
+  );
+  animation: milestone-stripes 1.1s linear infinite;
+}
+@keyframes milestone-stripes {
+  from { background-position: 0 0; }
+  to   { background-position: -14.14px 0; }   /* 一个条纹周期，视觉上向左流动 */
+}
+@media (prefers-reduced-motion: reduce) {
+  .milestone-fill::after { animation: none; }
+}
+
+
+/* ── 进度条斜条纹：只在进行中的卡片显示，并用 transform 消除接缝 ──
+   1) 默认所有卡片不显示动画，只有 [data-status=running] 才铺条纹
+   2) 原实现用 background-position 位移，14.14px 的周期在像素取整后
+      会在右端留下一条错位的接缝；改用 transform: translateX 由合成器处理，
+      并把伪元素放大到 inset:-50% 避免边缘露出。 */
+.milestone-fill::after {
+  content: "";
+  position: absolute;
+  inset: -50%;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0 5px,
+    color-mix(in srgb, #fff 26%, transparent) 5px 10px
+  );
+  opacity: 0;
+  animation: none;
+  will-change: transform;
+}
+.milestone-card[data-status=running] .milestone-fill::after {
+  opacity: 1;
+  animation: milestone-stripes 1.1s linear infinite;
+}
+@keyframes milestone-stripes {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(-14.1421356237px, 0, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .milestone-fill::after { animation: none !important; opacity: 0 !important; }
+}
+
+/* 新增状态：部分任务待核实（已关闭但找不到合入记录） */
+.milestone-card[data-status=unverified] { border-color: color-mix(in srgb, var(--muted) 45%, transparent); }
+.milestone-card[data-status=unverified] .milestone-state { color: var(--muted); }
+/* 进度条颜色不随状态变化：只有 completed 用绿色（既有规则），其余保持 accent 蓝 */
+
+
+/* ── 需求队列：文字左对齐、状态右对齐 ──
+   原用 flex + justify-content:space-between + flex-wrap:wrap，
+   换行后每行各自两端对齐，文字起始位置随内容浮动，看起来没对齐。 */
+.queue-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  background: var(--subtle);
+  border-radius: 8px;
+  flex-wrap: nowrap;          /* 不换行，避免每行独立对齐 */
+}
+/* 拖拽手柄固定在最左 */
+.queue-item > .drag-handle { flex: 0 0 auto; order: 0; }
+/* 文字区占据剩余空间，从左侧开始 */
+.queue-item > label {
+  flex: 1 1 auto;
+  min-width: 0;
+  order: 1;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+/* 中间按钮组紧跟文字 */
+.queue-item > button { flex: 0 0 auto; order: 2; }
+/* 状态描述贴右：ready 开关与告警都推到最右 */
+.queue-item > .queue-ready-toggle,
+.queue-item > .queue-warn { flex: 0 0 auto; order: 3; margin-left: auto; }
+/* 窄屏允许换行，但换行后仍保持左对齐与右对齐语义 */
+@media (max-width: 900px) {
+  .queue-item { flex-wrap: wrap; }
+  .queue-item > label { flex: 1 1 100%; }
+  .queue-item > .queue-ready-toggle,
+  .queue-item > .queue-warn { margin-left: 0; }
+}
+
+
+/* ── 任务列表：统一视觉语言 ──
+   原来一张卡片最多叠 4 层颜色：左边 3px 彩色边框 + 多层发光 + 蓝色 ID
+   + 彩色状态文字，而边框还是「左粗右细」，视觉上割裂。
+   现在只保留两层：左侧 2px 状态色条 + 状态文字同色，去掉发光。 */
+/* 边框四边同宽同色，只做极轻微的状态色偏，不再用左侧加粗色条 */
+.task {
+  border: 1px solid var(--border);
+}
+.task[data-status=running] {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+.task[data-status=paused] {
+  border-color: color-mix(in srgb, #bd7750 30%, var(--border));
+}
+.task[data-status=completed] {
+  border-color: color-mix(in srgb, #31966c 30%, var(--border));
+}
+/* 去掉多层发光：与左侧色条表达同一信息，纯属噪音 */
+.task .task-motion { display: none; }
+
+
+/* ── 需求队列对齐修正（覆盖上面的初版）──
+   实际结构：drag-handle / a.pr-link / span.queue-state / label.queue-ready-toggle
+   文字是 <a> 不是 <label>，初版选择器没命中；而 ready-toggle 上的
+   margin-left:auto 把全部空隙吸到自己前面，导致文字被挤到最右。 */
+.queue-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  background: var(--subtle);
+  border-radius: 8px;
+  flex-wrap: nowrap;
+}
+.queue-item > .drag-handle { flex: 0 0 auto; order: 0; }
+/* 文字区：占满中间，从左侧开始 */
+.queue-item > .pr-link,
+.queue-item > .queue-label,
+.queue-item > label:not(.queue-ready-toggle) {
+  flex: 1 1 auto;
+  min-width: 0;
+  order: 1;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+/* 状态描述与开关：不参与拉伸，自然靠右 */
+.queue-item > .queue-state,
+.queue-item > .queue-ready-toggle,
+.queue-item > .queue-warn,
+.queue-item > button { flex: 0 0 auto; }
+.queue-item > .queue-state { order: 2; margin-left: 0; }
+.queue-item > .queue-warn { order: 3; }
+.queue-item > .queue-ready-toggle { order: 4; margin-left: 0; }
+.queue-item > button { order: 5; }
+@media (max-width: 900px) {
+  .queue-item { flex-wrap: wrap; }
+  .queue-item > .pr-link,
+  .queue-item > .queue-label { flex: 1 1 100%; }
+}
+
+
+/* ── 队列项文字统一左起点 ──
+   可拖拽项有 20px 手柄 + 8px 右距 + 10px gap = 38px 缩进；
+   已关闭项没有手柄，文字就左移了 38px，整列看起来没对齐。
+   用同宽占位补齐，不改 DOM 结构。 */
+.queue-item:not([data-draggable]) > .pr-link::before,
+.queue-item:not([data-draggable]) > .queue-label::before {
+  content: "";
+  display: inline-block;
+  width: 20px;
+  /* 8px 手柄右距 + 10px flex gap：::before 在 <a> 内部不参与 gap，需一并补上 */
+  margin-right: 18px;
+}
+
+
+/* 排序写入期间：手柄置灰并禁止拖动 */
+#queueList[data-reordering] .drag-handle,
+.drag-handle[data-locked="1"] {
+  opacity: .35;
+  cursor: default;
+  pointer-events: none;
+}
+
+
+/* 新增展示态配色：已合入待归档、已归档 */
+.task-state[data-state=completed] { color: #78d0ac; }
+.task-state[data-state=archived] { color: var(--muted); }
+
+
+/* 完成态统一绿色：已归档与已合入待归档表达的是同一件事 */
+.task-state[data-state=completed],
+.task-state[data-state=archived] { color: #78d0ac; }
+
+
+/* 已完成任务不显示阶段：保留占位以维持 grid 列宽，视觉上整体隐藏 */
+.task-stage[data-empty="1"] { visibility: hidden; }
 

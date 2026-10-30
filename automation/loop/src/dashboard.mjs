@@ -326,7 +326,10 @@ export class DashboardCoordinator extends EventEmitter {
     this.githubNext = Date.now() + 60000;
     this.githubPending = Promise.resolve().then(async () => this.githubStatus(this.root, undefined, await integrationBase())).then(tasks => {
       this.github = {status:"ok", updatedAt:new Date().toISOString(), tasks};
-    }).catch(() => {
+    }).catch((error) => {
+      // 过去这里静默吞掉错误，导致面板只显示「GitHub 不可用」而无从排查
+      // （2026-10-30 实际是 TASK-032.md 的 frontmatter 少了闭合 ---）。
+      this.push("GitHub status unavailable: " + String(error?.message ?? error).slice(0, 300), "system");
       this.github = {status:"unavailable", updatedAt:null, tasks:{}};
     }).finally(() => { this.githubPending = null; this.emit("dashboard:event", {type:"status",data:{}}); });
   }
@@ -339,7 +342,7 @@ export class DashboardCoordinator extends EventEmitter {
   refreshCleanup() {
     if(this.cleanupController.signal.aborted || this.cleanupPending || Date.now()<this.cleanupNext)return;
     this.cleanupNext=Date.now()+60000;
-    this.cleanupPending=Promise.resolve(integrationBase()).then(base=>cleanupMergedTasks(this.root,{signal:this.cleanupController.signal,log:message=>this.push(message),base})).catch(e=>this.push(`Merged cleanup unavailable: ${e.message}`)).finally(()=>{this.cleanupPending=null;});
+    this.cleanupPending=Promise.resolve(integrationBase()).then(base=>cleanupMergedTasks(this.root,{signal:this.cleanupController.signal,log:message=>this.push(message),base,deferWhenRunnerActive:true})).catch(e=>this.push(`Merged cleanup unavailable: ${e.message}`)).finally(()=>{this.cleanupPending=null;});
   }
   /**
    * 从 .soxu/runner 最新的日志文件回填一次日志。
@@ -386,7 +389,8 @@ export class DashboardCoordinator extends EventEmitter {
     await this.intake.initialized;
     await this.drafts.initialized;
     const [progress, externalLockInfo, modelInfo] = await Promise.all([
-      localProgress(this.root, id => readCheckpoint(id, join(dataRoot(this.root), "checkpoints"))),
+      localProgress(this.root, id => readCheckpoint(id, join(dataRoot(this.root), "checkpoints")),
+        { checkpointDir: join(dataRoot(this.root), "checkpoints") }),
       inspectExternalLocks(this.root),
       Promise.all([readModelSettings(this.root),loadRoleModels(process.env,{root:this.root})]).then(([settings,selected])=>({status:"ok",settings,selected,envOverrides:{developer:Boolean(process.env.SOXU_DEVELOPER_PROVIDER || process.env.SOXU_DEVELOPER_MODEL),reviewer:Boolean(process.env.SOXU_REVIEWER_PROVIDER || process.env.SOXU_REVIEWER_MODEL)}})).catch(()=>({status:"unavailable"})),
     ]);

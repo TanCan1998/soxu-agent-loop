@@ -95,7 +95,7 @@ async function nextTaskId(root) {
  * 任务列表与里程碑统计里。现在提交时分配 TASK 编号并写入 catalog，
  * 需求与任务走同一条链路。
  */
-async function writeTaskFile(root, taskId, draft) {
+async function writeTaskFile(root, taskId, draft, { issue = null } = {}) {
   const deps = dependencyIds(draft.assessment.dependencies);
   const md = [
     "---",
@@ -103,6 +103,9 @@ async function writeTaskFile(root, taskId, draft) {
     `milestone: ${draft.milestone}`,
     `priority: ${draft.priority ?? "P1"}`,
     `dependencies: [${deps.join(", ")}]`,
+    // 记录对应的 GitHub issue 号：checkpoint 按 issue 号存，
+    // 任务文件按 TASK 号存，没有这个字段就没法把两者对上
+    ...(issue ? [`githubIssue: ${issue}`] : []),
     "---",
     "",
     `# ${draft.assessment.title}`,
@@ -128,6 +131,28 @@ async function writeTaskFile(root, taskId, draft) {
   return file;
 }
 
+/**
+ * 把 GitHub issue 号写进任务文件的 frontmatter。
+ * 幂等：已有相同值直接返回；已有不同值则覆盖（issue 重建时用得上）。
+ * 归档后任务在 tasks/done 下，也一并处理。
+ */
+export async function patchTaskIssue(root, taskId, issueNumber) {
+  if (!Number.isSafeInteger(issueNumber) || issueNumber <= 0) return null;
+  for (const dir of ["backlog", "done"]) {
+    const file = join(root, "tasks", dir, taskId + ".md");
+    let text;
+    try { text = await readFile(file, "utf8"); } catch { continue; }
+    if (new RegExp(`^githubIssue:\\s*${issueNumber}$`, "m").test(text)) return file;
+    const next = /^githubIssue:\s*\d+$/m.test(text)
+      ? text.replace(/^githubIssue:\s*\d+$/m, `githubIssue: ${issueNumber}`)
+      : text.replace(/^---\r?\n/, `---\ngithubIssue: ${issueNumber}\n`);
+    if (next === text) return null;
+    await writeFile(file, next, "utf8");
+    return file;
+  }
+  return null;
+}
+
 export async function submitRequirement(root, draft, execute=run) {
   const folder=await mkdtemp(join(tmpdir(),"soxu-intake-"));
   try {
@@ -144,6 +169,9 @@ export async function submitRequirement(root, draft, execute=run) {
     const result=await execute("gh",["issue","create","--title",`[${draft.milestone}] [${taskId}] ${draft.assessment.title}`,"--body-file",path,"--label",draft.ready ? "agent:ready" : "agent:blocked"],{cwd:root,timeoutMs:45000});
     const url=result.stdout.trim();
     if (!/^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/.test(url)) throw fail("submit-result-unknown",503);
+    // 回写 issue 号：checkpoint 按 issue 号存，任务文件按 TASK 号存，
+    // 有了这个字段 localProgress 才能把两者对上（否则 phase 永远读不到）
+    await patchTaskIssue(root, taskId, Number(url.match(/\/(\d+)$/)[1]));
     return url;
   } finally { await rm(folder,{recursive:true,force:true}); }
 }

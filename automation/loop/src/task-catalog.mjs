@@ -17,7 +17,9 @@ export function parseTaskDocument(filename, body) {
   for (const line of match[1].split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
-    const kv = trimmed.match(/^(id|priority|dependencies|milestone):\s*(.*?)\s*$/);
+    // githubIssue：对应的 GitHub issue 号。checkpoint 按 issue 号存、任务按 TASK 号存，
+    // 没有这个字段 localProgress 就无法把两者对上（phase 会永远读不到）。
+    const kv = trimmed.match(/^(id|priority|dependencies|milestone|githubIssue):\s*(.*?)\s*$/);
     if (!kv) throw new Error(`Unknown metadata in ${id}: ${trimmed}`);
     if (meta.has(kv[1])) throw new Error(`Duplicate ${kv[1]} in ${id}`);
     meta.set(kv[1], kv[2]);
@@ -35,7 +37,13 @@ export function parseTaskDocument(filename, body) {
   if (milestone !== null && !MILESTONE_ID.test(milestone)) throw new Error(`Invalid milestone in ${id}`);
   const title = body.match(/^#\s+(.+)$/m)?.[1];
   if (!title) throw new Error(`Missing task title: ${id}`);
-  return { id, number: Number(id.slice(5)), title, body, priority, dependencies, milestone };
+  const issueRaw = meta.get("githubIssue");
+  let githubIssue = null;
+  if (issueRaw !== undefined) {
+    if (!/^\d+$/.test(issueRaw)) throw new Error(`Invalid githubIssue in ${id}`);
+    githubIssue = Number(issueRaw);
+  }
+  return { id, number: Number(id.slice(5)), title, body, priority, dependencies, milestone, githubIssue };
 }
 
 export function validateTaskCatalog(tasks) {

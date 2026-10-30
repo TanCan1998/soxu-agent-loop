@@ -8,11 +8,15 @@ const THEME_KEY = "soxu.dashboard.theme.v1";
 const FOLLOW_KEY = "soxu.dashboard.followLogs.v1";
 const LOG_LIMITS = new Set([20, 50, 100, 200]);
 const preferenceStorage = typeof localStorage === "undefined" ? { getItem: () => null, setItem: () => {} } : localStorage;
-const stateLabels = { running: "进行中", paused: "已暂停", blocked: "已阻塞", pending: "等待", done: "本地已结束" };
+const stateLabels = {
+  running: "进行中", paused: "已暂停", blocked: "已阻塞", pending: "等待", done: "本地已结束",
+  // 以下两项不是 task.status 的取值，而是由远端状态推导出的展示态
+  completed: "已合入 · 待归档", archived: "已完成"
+};
 const phaseLabels = {
   worktree:"准备工作树", install:"安装依赖", develop:"开发", checks:"执行检查", review:"代码审查",
   postConflictInstall:"冲突后安装", recoveryInstall:"恢复时安装依赖", finalChecks:"最终检查", commit:"提交", push:"推送",
-  createPr:"创建 PR", merge:"等待合并", done:"完成"
+  createPr:"创建 PR", merge:"等待合并", done:"完成", archived:"已归档"
 };
 const activityLabels = { waiting:"等待模型", generating:"生成中", tool:"执行工具", completed:"已完成", failed:"失败" };
 let connected = false, requestInFlight = false;
@@ -484,10 +488,30 @@ function renderTasks(data) {
     // 按状态发光：运行中脉冲，暂停/阻塞橙色微光，已完成绿色微光（waiting 不加）。
   if (card.dataset.status !== "waiting") {const effect=element("div",undefined,"task-motion");effect.setAttribute("aria-hidden","true");card.append(effect);}
     card.append(element("div", "#" + task.id, "task-id"), element("div", task.title, "task-name"));
-    const status = element("div", stateLabels[task.status] || task.status, "task-state");
-    status.dataset.state = task.status;
-    card.append(status, element("div", phaseLabels[task.phase] || task.phase || "尚未开始", "task-stage"),
-      element("div", task.updatedAt ? new Date(task.updatedAt).toLocaleTimeString() : "—", "task-time"));
+    // 状态文字必须和 card.dataset.status 同源。
+    // 过去文字只读 task.status（本地 state 文件），而卡片状态还看了远端 merged，
+    // 于是 PR 早已合并的任务会显示成「完成配色 + 等待两个字」。
+    let displayState = task.status;
+    if (task.phase === "archived") displayState = "archived";
+    else if (merged) displayState = "completed";
+    const status = element("div", stateLabels[displayState] || displayState, "task-state");
+    status.dataset.state = displayState;
+    // 时间带日期：只给时分秒的话，跨天的任务看不出是哪一天
+    const stamp = task.updatedAt ? new Date(task.updatedAt) : null;
+    // 手动拼 MM-DD HH:mm：zh-CN 的 toLocaleDateString 会给 10/28 这种斜杠格式
+    const pad = n => String(n).padStart(2, "0");
+    const timeText = stamp && !Number.isNaN(stamp.getTime())
+      ? pad(stamp.getMonth() + 1) + "-" + pad(stamp.getDate()) + " " + pad(stamp.getHours()) + ":" + pad(stamp.getMinutes())
+      : "—";
+    // 阶段只对「还在执行」的任务有意义。
+    // 已完成/已归档的任务显示阶段反而自相矛盾（曾出现「已合入 · 待归档」配「尚未开始」：
+    // checkpoint 按 issue 号存、这里按 TASK 号查，永远查不到，phase 就退化成 null）。
+    const finished = displayState === "completed" || displayState === "archived";
+    // 已完成的任务不显示阶段：保留占位元素以免 grid 错位，但用 visibility 隐藏，
+    // 连「阶段」这两个字的伪元素一起藏掉。
+    const stage = element("div", finished ? "" : (phaseLabels[task.phase] || task.phase || "尚未开始"), "task-stage");
+    if (finished) stage.dataset.empty = "1";
+    card.append(status, stage, element("div", timeText, "task-time"));
     const taskId = "TASK-" + String(task.id).padStart(3,"0");
     const remote = data.github?.status === "ok" ? data.github.tasks?.[taskId] : null;
     const details = [];
@@ -618,6 +642,8 @@ function showMilestoneDetail(id, name, stage, limited, source) {
       : { key:"pending", label:"待处理", icon:"○" };
     const chip=element("span",state.icon+" "+state.label,"milestone-state");
     chip.dataset.state=state.key;
+    // 「未找到合入记录」容易被读成异常，这里把成因写进 tooltip
+    if(state.key==="unverified") setTip(chip,"issue 已关闭，但没有找到合并进集成分支的 PR 记录：可能是早期合入 main、PR 描述未写 Closes，或人工关闭。");
     if(item.localStatus) setTip(chip,"本地状态："+item.localStatus+"（未查询 GitHub）");
     row.append(label,chip); list.append(row);
     }
@@ -635,12 +661,15 @@ function renderPhaseTasks(data) {
   const list = active.length ? active : upcoming;
   host.append(element("span", active.length ? "活跃任务：" : "即将进行的任务：", "phase-tasks-label"));
   if (!list.length) { host.append(element("span", "无", "subtle")); return; }
-  for (const task of list.slice(0, 8)) {
+  // 单行显示，超出用省略号收尾；右侧给出总数，不再横向滚动。
+  const shown = list.slice(0, 6);
+  for (const task of shown) {
     const chip = element("span", task.title, "phase-task-chip");
     setTip(chip, "#" + task.id + " " + task.title);
     host.append(chip);
   }
-  if (list.length > 8) host.append(element("span", "+" + (list.length - 8) + " 项", "subtle"));
+  if (list.length > shown.length) host.append(element("span", "…", "phase-tasks-more"));
+  host.append(element("span", "共 " + list.length + " 条", "phase-tasks-total"));
 }
 function renderProjectPhase(github, data) {
   // GitHub 不可用时退回本地检查点推出的路线图，避免整块变成"待核实"。
@@ -653,19 +682,36 @@ function renderProjectPhase(github, data) {
   lastRoadmapKey=key;
   const phases=new Set(data.runner ? (data.taskPhases ?? []).filter(p=>p.status === "running").map(p=>p.taskId) : []);
   const node=$("roadmapCards");node.replaceChildren();
-  let running=0, paused=0, total=0, merged=0;
+  let running=0, paused=0, unknownCount=0, total=0, merged=0;
+  // 待核实要单独统计：它和 running/paused 不是互斥关系。
+  // M1 可能整体是 paused，但内部仍有 3 项完成证据待核实，只按状态计数会漏掉。
+  let unverifiedMilestones=0, unverifiedTasks=0;
   for (const id of Object.keys(names)) {
     const stage=roadmap?.stages?.find(x=>x.id===id);
     const unknown=!roadmap || roadmap.limited || !stage || !stage.total;
     const active=!unknown && stage.issues.some(number=>phases.has(number));
-    const state=unknown ? "unknown" : active ? "running" : stage.paused ? "paused" : stage.merged===stage.total && !stage.unknown ? "completed" : "waiting";
-    if(active)running++;else if(state==="paused")paused++;
+    // 状态界定（优先级从高到低）：
+  //   unknown  数据缺失（GitHub 不可用 / 无归类）
+  //   running  有任务正在执行
+  //   paused   有暂停或阻塞任务
+  //   completed 全部合入且无待核实
+  //   unverified 有「已关闭但找不到合入记录」的任务 —— 过去这一档被并进 waiting，
+  //              导致卡片显示「等待推进」、点进明细却全是「未找到合入记录」
+  //   waiting  其余（有未合入任务，但既没在跑也没卡住）
+  const state=unknown ? "unknown"
+    : active ? "running"
+    : stage.paused ? "paused"
+    : stage.merged===stage.total && !stage.unknown ? "completed"
+    : stage.unknown > 0 ? "unverified"
+    : "waiting";
+    if(active)running++;else if(state==="paused")paused++;else if(state==="unknown")unknownCount++;
+  if(!unknown && stage.unknown > 0){unverifiedMilestones++;unverifiedTasks+=stage.unknown;}
     if(!unknown){total+=stage.total;merged+=stage.merged;}
     const card=element("article",undefined,"milestone-card");card.dataset.status=state;
     card.setAttribute("role","button");card.setAttribute("tabindex","0");card.setAttribute("aria-label",id+" · "+names[id]+"，查看任务明细");
     const show=()=>showMilestoneDetail(id,names[id] ?? id,stage,Boolean(roadmap?.limited),roadmap?.source);
     card.addEventListener("click",show);card.addEventListener("keydown",event=>{if(event.key==="Enter" || event.key===" "){event.preventDefault();show();}});
-    const labels={unknown:"待核实",running:"进行中",paused:"暂停 / 阻塞",completed:"任务已合入 · 验收待确认",waiting:"等待推进"};
+    const labels={unknown:"待核实",running:"进行中",paused:"暂停 / 阻塞",completed:"任务已合入 · 验收待确认",unverified:"部分任务待核实",waiting:"等待推进"};
     const head=element("div",undefined,"milestone-heading");head.append(element("strong",id+" · "+(names[id] ?? id)),element("span",labels[state],"milestone-state"));card.append(head);
     const track=element("div",undefined,"milestone-track"), fill=element("span",undefined,"milestone-fill");
     track.setAttribute("role","progressbar");track.setAttribute("aria-label",id+" 已归类任务的合入进度");
@@ -676,10 +722,19 @@ function renderProjectPhase(github, data) {
     node.append(card);
   }
   const local = roadmap?.source === "local";
-  $("projectPhaseTitle").textContent=!roadmap ? "项目里程碑状态待核实" : running ? `${running} 个里程碑正在推进` : paused ? `${paused} 个里程碑有暂停或阻塞任务` : "已归类里程碑当前无活跃任务";
+  // 过去这里是互斥三元：有 running 就只报 running，没 running 才报 paused，
+  // 待核实（unverified）与数据缺失（unknown）从不出现。现在并列陈述各自的数量。
+  const parts=[];
+  if(running)parts.push(`${running} 个正在推进`);
+  if(paused)parts.push(`${paused} 个暂停或阻塞`);
+  if(unverifiedMilestones)parts.push(`${unverifiedMilestones} 个里程碑共 ${unverifiedTasks} 项待核实`);
+  if(unknownCount)parts.push(`${unknownCount} 个归类待确认`);
+  $("projectPhaseTitle").textContent=!roadmap ? "项目里程碑状态待核实"
+    : parts.length ? parts.join(" · ")
+    : "已归类里程碑当前无活跃任务";
   $("projectPhaseCount").textContent=roadmap && !roadmap.limited ? `${merged} / ${total} 项已合入${local ? "（本地推定）" : ""}` : "—";
   renderPhaseTasks(data);
-  $("projectPhaseDetail").textContent=!roadmap ? "GitHub 与本地检查点都没有可用的里程碑数据。" : roadmap.limited ? "GitHub 查询达到上限，进度待核实。" : local ? `GitHub 暂不可用，以上按本地检查点与任务文件推定；未归类 ${roadmap.unclassified} 项。合入与验收仍需在 GitHub 复核。` : `按任务元数据或 GitHub 里程碑自动归类；未归类 ${roadmap.unclassified} 项。运行状态基于控制台活动，数据可能有延迟。`;
+  $("projectPhaseDetail").textContent=!roadmap ? "GitHub 与本地检查点都没有可用的里程碑数据。" : roadmap.limited ? "GitHub 查询达到上限，进度待核实。" : local ? "GitHub 暂不可用，以上按本地检查点与任务文件推定；合入与验收仍需在 GitHub 复核。" : "按任务元数据或 GitHub 里程碑自动归类；运行状态基于控制台活动，数据可能有延迟。";
 }
 
 function render(data) {
@@ -1159,11 +1214,30 @@ function renderQueue() {
     if (item.url && /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/.test(item.url)) {title.href=item.url;title.target="_blank";title.rel="noopener noreferrer";}
     const checkpoint=item.checkpoint;
     const live=(data.taskPhases || []).find(t=>t.taskId===item.number);
-    const state=item.state === "CLOSED" ? (item.merged ? "已关闭 · PR 已合并" : "已关闭 · 未找到合入记录") : live?.status === "running" ? "执行中 · "+live.phase : checkpoint?.status === "paused" ? "已暂停 · "+(checkpoint.phase ?? "") : checkpoint?.status === "blocked" ? "已阻塞 · "+(checkpoint.phase ?? "") : "等待执行";
+    // 状态描述与右侧开关必须同源，否则会出现「执行中」配「未就绪」的矛盾。
+    // 唯一数据源 = 互斥的状态标签（agent:ready / waiting / in-progress / paused / blocked / pr），
+    // checkpoint 只用来补阶段后缀，不再独立决定状态词。
+    const AGENT_LABEL_TEXT = {
+      "agent:ready": "就绪 · 等待认领",
+      "agent:waiting": "等待前置任务",
+      "agent:in-progress": "执行中",
+      "agent:paused": "已暂停",
+      "agent:blocked": "已阻塞",
+      "agent:pr": "已交付 · 待合并",
+    };
+    const agentLabel = (item.labels || []).find(l => AGENT_LABEL_TEXT[l]);
+    const phaseText = live?.phase ?? checkpoint?.phase ?? "";
+    const closedText = item.merged ? "已关闭 · PR 已合并" : "已关闭 · 未找到合入记录";
+    const state = item.state === "CLOSED"
+      ? closedText
+      : (AGENT_LABEL_TEXT[agentLabel] ?? "未开启 · 等待设为就绪") + (phaseText ? " · " + phaseText : "");
     row.append(title,element("span",state,"queue-state"));
-    // 已创建需求也能直接切换 ready（打标签前服务端会做依赖校验）
-    if (item.state === "OPEN") {
-      const isReady = (item.labels || []).includes("agent:ready");
+    // ready 开关只在「可调度」的状态下出现：已就绪可取消，未开启/等依赖可开启。
+    // 执行中 / 已暂停 / 已阻塞 / 已交付 不显示开关——那些状态由左侧文字说明，
+    // 再挂一个「未就绪」只会自相矛盾。
+    const SCHEDULABLE_LABELS = new Set([undefined, "agent:waiting", "agent:ready"]);
+    if (item.state === "OPEN" && SCHEDULABLE_LABELS.has(agentLabel)) {
+      const isReady = agentLabel === "agent:ready";
       const box = element("input");
       box.type = "checkbox";
       box.checked = isReady;
@@ -1548,6 +1622,7 @@ $("batchDrafts").addEventListener("click",async()=>{const ids=[...selectedDrafts
   const onUp = async () => {
     if (!drag) return;
     const active = drag.active;
+    const beforeOrder = drag.beforeOrder ?? [];
     drag.row.classList.remove("dragging", "drop-target");
     drag = null;
     document.body?.classList.remove("dragging-draft");
@@ -1558,19 +1633,34 @@ $("batchDrafts").addEventListener("click",async()=>{const ids=[...selectedDrafts
     const order = [...(list.querySelectorAll?.("[data-issue-number]") ?? [])]
       .map(r => Number(r.getAttribute("data-issue-number")))
       .filter(n => Number.isSafeInteger(n) && n > 0);
+    // 顺序没变就不发请求，避免无意义的写入和一次多余的刷新
+    if (order.length === beforeOrder.length && order.every((n, i) => n === beforeOrder[i])) return;
+    // 写入期间锁住所有手柄：置灰 + 屏蔽指针，防止半途再拖导致前后端顺序错位
+    list.dataset.reordering = "1";
+    const handles = [...(list.querySelectorAll?.("[data-drag-handle]") ?? [])];
+    for (const h of handles) h.dataset.locked = "1";
     try {
       await api("/api/queue-reorder", { method: "POST", body: { order } });
       lastQueueKey = "";
       notice("需求顺序已保存，agent 会按此顺序认领。");
       await refresh();
     } catch (error) { notice("保存顺序失败：" + error.message); }
+    finally {
+      for (const h of handles) delete h.dataset.locked;
+      delete list.dataset.reordering;
+    }
   };
   list.addEventListener("pointerdown", event => {
     const handle = event.target?.closest?.("[data-drag-handle]");
     const row = handle?.closest?.("[data-issue-number]");
     if (!row || row.dataset.draggable !== "1") return;
+    if (handle.dataset.locked === "1") return; // 上一次排序还在写入
     event.preventDefault?.();
-    drag = { row, pointerId: event.pointerId ?? null, startY: event.clientY, active: false };
+    // 记下拖拽前的顺序，用于判断是否真的移动过
+    const beforeOrder = [...(list.querySelectorAll?.("[data-issue-number]") ?? [])]
+      .map(r => Number(r.getAttribute("data-issue-number")))
+      .filter(n => Number.isSafeInteger(n) && n > 0);
+    drag = { row, pointerId: event.pointerId ?? null, startY: event.clientY, active: false, beforeOrder };
     window.addEventListener("pointermove", onMove, { passive: false });
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onUp);
