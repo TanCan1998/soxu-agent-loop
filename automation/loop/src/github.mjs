@@ -1,11 +1,11 @@
 import { gh, git, run } from "./process.mjs";
 import { hasRequiredChecks } from "./branch-protection.mjs";
-import { writeFile, mkdtemp, rm } from "node:fs/promises";
+import { readFile, writeFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROOT } from "./config.mjs";
 import { validIssue } from "./guards.mjs";
-import { loadTaskCatalog, taskIdFromIssueTitle } from "./task-catalog.mjs";
+import { loadTaskCatalog, taskIdFromIssueTitle, withGithubIssue } from "./task-catalog.mjs";
 import { planGithubQueue, mergedIssueNumbers, waitingLabelDowngrades } from "./github-queue.mjs";
 import { readQueueOrder } from "./queue-order.mjs";
 
@@ -122,8 +122,16 @@ export async function seedIssues() {
     const label = task.dependencies.length ? "agent:waiting" : "agent:ready";
     const names={"TASK-001":"实现 Pi RPC 进程管理","TASK-002":"实现项目与会话目录","TASK-003":"构建多会话工作区","TASK-004":"实现进程内存预算","TASK-005":"实现 Worktree 集成","TASK-006":"完善发布就绪检查"};
     if (!task.milestone) throw new Error(`Task ${task.id} has no milestone; refusing to seed an unclassified issue`);
-    await gh(["issue", "create", "--title", `[${task.milestone}] [${task.id}] ${names[task.id] ?? task.title}`, "--body-file", file, "--label", label], ROOT);
-    console.log(`Created Issue ${task.id} (${label})`);
+    const created = await gh(["issue", "create", "--title", `[${task.milestone}] [${task.id}] ${names[task.id] ?? task.title}`, "--body-file", file, "--label", label], ROOT);
+    // 立即把 Issue 号回填到 frontmatter：checkpoint 按 issue 号存、任务按 TASK 号存，
+    // 缺 githubIssue 会让 localProgress 永远读不到阶段，人工补容易漏（TASK-033~039 就是这样补的）。
+    const issueNumber = Number(/\/issues\/(\d+)/.exec(String(created))?.[1]);
+    if (Number.isFinite(issueNumber) && issueNumber > 0) {
+      await writeFile(file, withGithubIssue(await readFile(file, "utf8"), issueNumber), "utf8");
+      console.log(`Created Issue ${task.id} (${label}) -> #${issueNumber}`);
+    } else {
+      console.warn(`Created Issue ${task.id} (${label}) but could not parse the issue number; fill githubIssue manually`);
+    }
   }
 }
 

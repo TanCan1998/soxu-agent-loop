@@ -64,6 +64,20 @@ export function validateTaskCatalog(tasks) {
   return tasks;
 }
 
+/**
+ * 把 seed 生成的 Issue 号写回任务 frontmatter（幂等）。
+ *
+ * 没有 githubIssue，localProgress 无法把 checkpoint（按 issue 号存）与任务（按 TASK 号存）对上，
+ * 阶段会永远读不到。之前只能人工回填，容易漏。
+ */
+export function withGithubIssue(body, issueNumber) {
+  const match = body.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!match) throw new Error("Missing task frontmatter");
+  const lines = match[1].split(/\r?\n/).filter(line => !/^githubIssue:\s*/.test(line.trim()));
+  lines.unshift("githubIssue: " + issueNumber);
+  return body.replace(match[0], "---\n" + lines.join("\n") + "\n---");
+}
+
 export async function loadTaskCatalog(root = ROOT) {
   const tasks = [];
   for (const category of ["backlog", "done"]) {
