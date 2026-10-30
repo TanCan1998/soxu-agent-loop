@@ -79,7 +79,27 @@ function notice(message) {
     // 弹窗用 showModal() 会进入 top layer，普通 position:fixed 元素再高的 z-index
     // 也会被它和它的 backdrop 盖住（backdrop 还有 blur）。popover 同样在 top layer，
     // 且后显示的排在 dialog 之上。
-    try { toast.showPopover?.(); } catch { /* 已显示或不支持 popover */ }
+    if (typeof toast.showPopover === "function") {
+      // 必须每次先 hide 再 show：top layer 的顺序是「后进入者在上」，
+      // 而 toast 一旦 open 就一直留在里面。后续再 showPopover() 会抛
+      // InvalidStateError 被吞掉，于是打开弹窗（showModal 后进入）之后，
+      // toast 仍排在 dialog 下面，看起来就是被遮住。
+      try {
+        if (toast.matches?.(":popover-open")) toast.hidePopover();
+        toast.showPopover();
+      } catch { /* 不支持或被拒绝 */ }
+    } else {
+      // 降级（浏览器不支持 popover，Chrome <114 / Firefox <125）：
+      // 1) 必须先移除 popover 属性 —— 只要它还在，UA 的
+      //    [popover]:not(:popover-open){display:none} 就会把 toast 藏起来；
+      // 2) 再把 toast 挂进当前打开的 dialog。这样它落在 dialog 的层叠上下文里，
+      //    不会被 dialog 自己盖住；position:fixed 不受祖先 overflow 裁剪，
+      //    仍能贴到视口底部。
+      if (toast.hasAttribute?.("popover")) toast.removeAttribute("popover");
+      const dialog = document.querySelector?.("dialog[open]");
+      const host = dialog ?? document.body;
+      if (host && toast.parentElement !== host) host.appendChild(toast);
+    }
     toast.dataset.show = "1";
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { toast.dataset.show = "0"; }, 3600);
@@ -137,6 +157,10 @@ function closeDialog(dialog) {
   // 先收指示条再播退场动画：关闭动画期间容器仍可见，
   // 如果等到 close 事件再重算，会看到发光条闪一下再消失。
   hideIndicatorsIn(dialog);
+  // toast 可能在降级模式下被挂进了这个 dialog，关闭时移回 body，
+  // 否则下一个 toast 会落在一个不可见的容器里。
+  const toast = $("toast");
+  if (toast && toast.parentElement === dialog) document.body.appendChild(toast);
   // 上一次退场没有收尾（动画事件丢失等）：立刻强制关闭，绝不让弹窗卡在
   // open + closing 状态——否则它既关不掉、又因为已 open 而无法再次打开。
   if (dialog.dataset.closing === "1") {
@@ -1646,16 +1670,35 @@ function renderModelChoices() {
   if (!groups.size) container.append(element("p","没有匹配模型","hint"));
   else if ([...groups.values()].reduce((total,rows)=>total+rows.length,0)>300) container.append(element("p","仅展示前 300 个模型，请继续搜索以缩小范围。","hint"));
 }
+/** 模型列表加载中的骨架占位：过去这里是一片空白，看不出在加载还是出错。 */
+function renderModelSkeleton() {
+  const container = $("modelGroups");
+  if (!container) return;
+  container.replaceChildren();
+  for (let i = 0; i < 6; i++) {
+    const row = element("div", undefined, "model-skeleton");
+    row.setAttribute("aria-hidden", "true");
+    // 宽度递减，看起来更像列表而不是一叠等宽条
+    row.style.width = (92 - i * 6) + "%";
+    container.append(row);
+  }
+  const hint = element("p", "正在读取模型列表…", "hint model-skeleton-hint");
+  container.append(hint);
+}
 async function refreshModelCatalog() {
   $("modelMessage").textContent="正在读取本机 Pi 模型列表…";
   $("reloadModels").disabled=true;
+  renderModelSkeleton();
   try {const result=await api("/api/model-catalog");modelCatalog=result.models;$("modelMessage").textContent=`发现 ${modelCatalog.length} 个模型；已配置但未列出的模型需自行核实可用性。`+(result.warning ? " Pi 还报告了警告，请在终端核查。" : "");renderModelChoices();}
   catch(error){modelCatalog=[];$("modelMessage").textContent="读取失败：请检查 Pi 登录与网络；已保存配置不会改变。";renderModelChoices();}
   finally {$("reloadModels").disabled=false;}
 }
 $("openModels").addEventListener("click",async()=>{
   if (!connected || !modelSettings) return notice("先连接控制台并检查模型配置。");
-  modelDraft=JSON.parse(JSON.stringify(modelSettings));$("modelScope").value="global";$("modelSearch").value="";openDialog($("modelDialog"));setTimeout(refreshScrollIndicators,0);renderModelChoices();await refreshModelCatalog();
+  modelDraft=JSON.parse(JSON.stringify(modelSettings));$("modelScope").value="global";$("modelSearch").value="";openDialog($("modelDialog"));setTimeout(refreshScrollIndicators,0);
+  // 不要先 renderModelChoices：模型目录还没请求回来，先渲染只会闪一下「没有匹配模型」，
+  // 把紧接着出现的加载骨架覆盖掉。refreshModelCatalog 内部会先铺骨架，成功后自己渲染。
+  await refreshModelCatalog();
 });
 $("closeModels").addEventListener("click",()=>closeDialog($("modelDialog")));
 $("reloadModels").addEventListener("click",()=>void refreshModelCatalog());
