@@ -938,3 +938,19 @@ body.dragging-draft .queue-item{cursor:grabbing}
 /* Firefox */
 * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--accent, #528fff) 38%, #8a93a6) transparent; }
 
+
+/* ── 置信度标签移到标题左侧 ──
+   折叠三角在 summary::before（5px + 8px margin = 13px），
+   .report-title 用 gap 8px 与标题分隔，标签自身不再额外留左边距，
+   避免和三角叠加成双重缩进。 */
+.report-title { gap: 8px; }
+.report-title .confidence-badge {
+  flex: none;
+  margin-left: 0;
+  margin-right: 0;
+  min-width: 22px;
+  text-align: center;
+}
+.report-title strong { order: 2; }
+.report-title .confidence-badge { order: 1; }
+

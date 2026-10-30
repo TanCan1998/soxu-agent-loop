@@ -1047,15 +1047,16 @@ async function loadAdvisory(lane, selected=null) {
         // 标题过长时自己省略，不能把置信度标签挤出去（标题栏是 space-between，
         // 三个平级子元素会被推开，标签跑到中间）。
         const titleWrap=element("span",undefined,"report-title");
-        const strong=element("strong",part.title);
-        strong.title=part.title;   // 溢出时悬浮显示完整标题
-        titleWrap.append(strong);
+        // 等级标签放在标题文字左侧，先于标题 append
         if(part.confidence) {
           const level=String(part.confidence).toLowerCase();
           const badge=element("span",CONFIDENCE_LABEL[level] ?? part.confidence,"confidence-badge");
           badge.dataset.level=level;
           titleWrap.append(badge);
         }
+        const strong=element("strong",part.title);
+        strong.title=part.title;   // 溢出时悬浮显示完整标题
+        titleWrap.append(strong);
         summary.append(titleWrap);
         // 复制单条：放折叠头里，点它不触发折叠（stopPropagation）。
         const copy=copyButton(part.title+"\n"+partToText(part),"复制"+part.title);
