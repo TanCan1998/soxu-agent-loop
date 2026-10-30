@@ -460,6 +460,10 @@ function renderFilterBar(hostId, key, onPick, counts) {
     host.append(button);
   }
 }
+// 列表分页上限：压测显示 500 个任务渲染只要 5ms，但 3746 个 DOM 节点会让滚动变卡。
+// 真正的瓶颈是节点数，所以按页渲染，而不是优化渲染函数本身。
+const LIST_PAGE_SIZE = 50;
+const listPageSize = { tasks: LIST_PAGE_SIZE, queue: LIST_PAGE_SIZE };
 function renderTasks(data) {
   const tasks = data.tasks || [];
   const key = JSON.stringify([tasks, data.busy, data.github, listFilters.tasks]);
@@ -473,7 +477,8 @@ function renderTasks(data) {
     done: tasks.filter(taskDone).length,
   });
   const visible = [...tasks].sort((a, b) => a.id - b.id).filter(task => passesFilter(listFilters.tasks, taskDone(task)));
-  for (const task of visible) {
+  const shownTasks = visible.slice(0, listPageSize.tasks);
+  for (const task of shownTasks) {
     const card = element("article", undefined, "task");
     const live=Boolean(data.runner) && (data.taskPhases ?? []).some(p=>p.taskId === (data.github?.tasks?.["TASK-"+String(task.id).padStart(3,"0")]?.issue ?? task.id) && p.status === "running");
     const merged=data.github?.tasks?.["TASK-"+String(task.id).padStart(3,"0")]?.pr?.state === "merged";
@@ -519,6 +524,17 @@ function renderTasks(data) {
     if (task.status === "pending" && remote?.missing?.length) details.push("等待依赖合并：" + remote.missing.join("、"));
     if (details.length) card.append(element("div", details.join(" · "), "task-detail"));
     node.append(card);
+  }
+  if (visible.length > shownTasks.length) {
+    const rest = visible.length - shownTasks.length;
+    const more = element("button", "显示剩余 " + rest + " 项", "ghost");
+    more.type = "button";
+    more.addEventListener("click", () => {
+      listPageSize.tasks += LIST_PAGE_SIZE;
+      lastTaskKey = "";
+      renderTasks(lastSnapshot ?? data);
+    });
+    node.append(more);
   }
   if (!visible.length) node.append(element("div", tasks.length ? "该状态下暂无任务" : "暂无任务", "empty"));
 }
@@ -938,7 +954,14 @@ async function loadAdvisory(lane, selected=null) {
         if(part.confidence) { const badge=element("span",part.confidence,"confidence-badge"); badge.dataset.level=part.confidence; summary.append(badge); }
         details.append(summary);
         details.addEventListener("toggle",()=>{
-          if(!details.open || details.dataset.filled==="1") return;
+          if(!details.open) {
+            // 关闭即回收：只靠懒加载解决首屏，一路展开仍会让 DOM 持续增长。
+            const body=details.querySelector(".assessment-body");
+            if(body) body.remove();
+            details.dataset.filled="0";
+            return;
+          }
+          if(details.dataset.filled==="1") return;
           details.dataset.filled="1";
           const body=element("div",undefined,"assessment-body");
           if(part.impact) body.append(element("p","影响："+part.impact));
@@ -1109,7 +1132,8 @@ function renderQueue() {
   if (data.github?.status !== "ok") { queue.append(element("div","GitHub 需求列表暂不可用，请检查连接后重试。","empty")); return; }
   if (!queueItems.length) { queue.append(element("div","没有已创建的需求。","empty")); return; }
   if (!queueVisible.length) { queue.append(element("div","当前分类下没有已创建的需求。","empty")); return; }
-  for (const item of queueVisible) {
+  const shownQueue = queueVisible.slice(0, listPageSize.queue);
+  for (const item of shownQueue) {
     const row=element("div",undefined,"queue-item");
     row.setAttribute("data-issue-number", String(item.number));
     if (item.state === "OPEN") {
@@ -1169,6 +1193,17 @@ function renderQueue() {
       row.append(tag);
     }
     queue.append(row);
+  }
+  if (queueVisible.length > shownQueue.length) {
+    const rest = queueVisible.length - shownQueue.length;
+    const more = element("button", "显示剩余 " + rest + " 项", "ghost");
+    more.type = "button";
+    more.addEventListener("click", () => {
+      listPageSize.queue += LIST_PAGE_SIZE;
+      lastQueueKey = "";
+      renderQueue();
+    });
+    queue.append(more);
   }
 }
 function renderDrafts(data, legacy = null) {
