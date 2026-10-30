@@ -1,13 +1,10 @@
 import { readdir, readFile, mkdir, writeFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { dataRoot } from "./config.mjs";
+// 标签清单只有一份（rules.mjs）。rules 不 import 任何运行模块，因此不会再有循环依赖。
+import { STATE_LABELS, TASK_STATE } from "./rules.mjs";
 
 const ORDER_FILE = "queue-order.json";
-
-// 与 github.mjs 的 STATE_LABELS 必须保持一致：同一时刻只允许存在一个状态标签。
-// 不直接 import 是为了避开 github.mjs ↔ queue-order.mjs 的循环依赖
-// （github.mjs 需要 readQueueOrder，本模块又需要标签清单）。
-const STATE_LABELS = ["agent:ready", "agent:waiting", "agent:in-progress", "agent:paused", "agent:blocked", "agent:pr"];
 
 const pathOf = root => join(dataRoot(root), "intake", ORDER_FILE);
 
@@ -83,7 +80,7 @@ export async function setIssueReady(root, number, ready, { execute }) {
   if (!Number.isSafeInteger(number) || number <= 0) throw Object.assign(new Error("invalid-issue"), { status: 400 });
   if (typeof ready !== "boolean") throw Object.assign(new Error("invalid-choice"), { status: 400 });
   if (!ready) {
-    await execute("gh", ["issue", "edit", String(number), "--remove-label", "agent:ready"], { cwd: root, timeoutMs: 30000, allowFailure: true });
+    await execute("gh", ["issue", "edit", String(number), "--remove-label", TASK_STATE.ready], { cwd: root, timeoutMs: 30000, allowFailure: true });
     return { ok: true, number, ready: false, missing: [] };
   }
   const view = JSON.parse((await execute("gh", ["issue", "view", String(number), "--json", "number,title,body,labels,state"], { cwd: root, timeoutMs: 30000 })).stdout);
@@ -94,16 +91,16 @@ export async function setIssueReady(root, number, ready, { execute }) {
   if (!done) return { ok: false, number, ready: false, missing: required, reason: "tasks-done-unreadable" };
   const missing = required.filter(id => !done.has(id));
   if (missing.length) return { ok: false, number, ready: false, missing, reason: "dependencies-missing" };
-  await execute("gh", ["label", "create", "agent:ready", "--color", "287a61", "--force"], { cwd: root, timeoutMs: 20000, allowFailure: true });
+  await execute("gh", ["label", "create", TASK_STATE.ready, "--color", "287a61", "--force"], { cwd: root, timeoutMs: 20000, allowFailure: true });
   // 状态标签互斥：先读真实标签再算差集，不能只 --add-label。
   // 否则一个已经是 agent:waiting 的需求点「就绪」后会同时持有两个状态标签，
   // loop 与面板对它的判断就会打架。
   const held = new Set((view.labels ?? []).map(l => l.name ?? l));
   const editArgs = ["issue", "edit", String(number)];
-  if (!held.has("agent:ready")) editArgs.push("--add-label", "agent:ready");
+  if (!held.has(TASK_STATE.ready)) editArgs.push("--add-label", TASK_STATE.ready);
   for (const name of STATE_LABELS) {
-    if (name !== "agent:ready" && held.has(name)) editArgs.push("--remove-label", name);
+    if (name !== TASK_STATE.ready && held.has(name)) editArgs.push("--remove-label", name);
   }
   if (editArgs.length > 3) await execute("gh", editArgs, { cwd: root, timeoutMs: 30000 });
-  return { ok: true, number, ready: true, missing: [], removed: [...held].filter(n => n !== "agent:ready" && STATE_LABELS.includes(n)) };
+  return { ok: true, number, ready: true, missing: [], removed: [...held].filter(n => n !== TASK_STATE.ready && STATE_LABELS.includes(n)) };
 }

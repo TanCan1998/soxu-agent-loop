@@ -5,8 +5,12 @@ import { run } from "./process.mjs";
 import { readCheckpoint, writeCheckpoint } from "./checkpoint.mjs";
 import { taskIdFromIssueTitle } from "./task-catalog.mjs";
 import { runnerStatus } from "./runner-state.mjs";
-// 「未完成」状态标签：已合入或已关闭的任务都不该再挂这些。
-const STALE_AGENT_LABELS = ["agent:in-progress", "agent:paused", "agent:blocked", "agent:ready", "agent:waiting", "agent:pr"];
+import {
+  archiveCommitSubject,
+  closingReferences,
+  orphanArchiveCommitSubject,
+  STALE_AFTER_MERGE_LABELS,
+} from "./rules.mjs";
 const samePath = (a,b) => process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 
 // Cleanup is restricted to Runner-owned GitHub tasks with an exact merged PR head.
@@ -20,7 +24,7 @@ async function closeMergedIssue(exec, state, n, base) {
     // 那条路径不经过本函数，旧版因此在已关闭 Issue 上残留 agent:* 标签
     // （需要人工清理，见 2026-11-02 的 8 个 Issue）。标签清理必须与关闭动作解耦。
     const view = JSON.parse((await exec("gh", ["issue", "view", String(n), "--json", "state,labels"])).stdout);
-    const stale = (view.labels ?? []).map(x => x.name).filter(name => STALE_AGENT_LABELS.includes(name));
+    const stale = (view.labels ?? []).map(x => x.name).filter(name => STALE_AFTER_MERGE_LABELS.includes(name));
     if (stale.length) await exec("gh", ["issue", "edit", String(n), ...stale.flatMap(name => ["--remove-label", name])]);
     if (view.state !== "OPEN") {
       state.issueClosed = "already-closed-clean";
@@ -77,7 +81,7 @@ async function archiveTaskFile(root, exec, state, issueNumber, { deferWhenRunner
   try { await access(from); } catch { return null; }
   await mkdir(join(root, "tasks", "done"), { recursive: true });
   await exec("git", ["mv", `tasks/backlog/${taskId}.md`, `tasks/done/${taskId}.md`], { cwd: root });
-  await exec("git", ["commit", "-m", `🔧 chore(tasks): 归档 ${taskId}（#${issueNumber} 已合并）`], { cwd: root });
+  await exec("git", ["commit", "-m", archiveCommitSubject(taskId, issueNumber)], { cwd: root });
   return taskId;
 }
 
@@ -280,8 +284,7 @@ async function archiveOrphanTasks(root, exec, log, signal) {
   const merged = new Set();
   const prs = JSON.parse((await exec("gh",
     ["pr", "list", "--state", "merged", "--limit", "1000", "--json", "body"])).stdout ?? "[]");
-  const re = /(?:^|\n)\s*(?:closes|closed|close|fixes|fixed|fix|resolves|resolved|resolve)\s+#(\d+)\b/gim;
-  for (const pr of prs) for (const m of String(pr.body ?? "").matchAll(re)) merged.add(Number(m[1]));
+  for (const pr of prs) for (const n of closingReferences(pr.body)) merged.add(n);
   const done = [];
   for (const c of selectOrphanTasks(candidates, closed, merged)) {
     if (signal?.aborted) break;
@@ -289,7 +292,7 @@ async function archiveOrphanTasks(root, exec, log, signal) {
     done.push(c.taskId);
   }
   if (done.length) {
-    await exec("git", ["commit", "-m", `🔧 chore(tasks): 归档 ${done.length} 个已完成任务（孤儿扫描）`], { cwd: root });
+    await exec("git", ["commit", "-m", orphanArchiveCommitSubject(done.length)], { cwd: root });
     log(`Archived ${done.length} orphan task(s): ${done.join(", ")}`);
   }
   return done;

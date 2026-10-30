@@ -1,4 +1,5 @@
 import { planTaskQueue, taskIdFromIssueTitle } from "./task-catalog.mjs";
+import { TASK_STATE } from "./rules.mjs";
 
 function labelsOf(issue) { return new Set((issue.labels ?? []).map(x => x.name)); }
 
@@ -39,12 +40,12 @@ export function planGithubQueue(issues, catalog, mergedNumbers = new Set(), orde
   for (const issue of issues) {
     if (issue.state !== "OPEN") continue;
     const labels = labelsOf(issue);
-    if (['agent:paused', 'agent:blocked', 'agent:pr', 'agent:in-progress'].some(x => labels.has(x))) continue;
-    if (!labels.has('agent:ready') && !labels.has('agent:waiting')) continue;
+    if ([TASK_STATE.paused, TASK_STATE.blocked, TASK_STATE.delivered, TASK_STATE.inProgress].some(x => labels.has(x))) continue;
+    if (!labels.has(TASK_STATE.ready) && !labels.has(TASK_STATE.waiting)) continue;
     const id = taskIdFromIssueTitle(issue.title);
     // TASK-tagged issues must exist in the local validated catalog.
     if (id && !runnable.has(id)) continue;
-    output.push({...issue, taskId: id, priority: id ? priorities.get(id) : 'P1', promote: labels.has('agent:waiting')});
+    output.push({...issue, taskId: id, priority: id ? priorities.get(id) : 'P1', promote: labels.has(TASK_STATE.waiting)});
   }
   const rank = {P0:0,P1:1,P2:2};
   // 用户自定义顺序优先（看板上拖动排序），未列出的按原规则排在后面。
@@ -66,6 +67,6 @@ export function waitingLabelDowngrades(issues, catalog, runnable) {
     const id = taskIdFromIssueTitle(issue.title);
     if (!id || !taskIds.has(id)) return false;
     const labels = labelsOf(issue);
-    return labels.has('agent:ready') && !['agent:paused','agent:blocked','agent:pr','agent:in-progress'].some(x => labels.has(x));
+    return labels.has(TASK_STATE.ready) && ![TASK_STATE.paused,TASK_STATE.blocked,TASK_STATE.delivered,TASK_STATE.inProgress].some(x => labels.has(x));
   });
 }

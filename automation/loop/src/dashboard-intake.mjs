@@ -10,6 +10,7 @@ import { run } from "./process.mjs";
 import { classifyFailure } from "./errors.mjs";
 import { MILESTONE_ID } from "./milestones.mjs";
 import { loadTaskCatalog } from "./task-catalog.mjs";
+import { issueTitle, TASK_STATE, validateIssueTitle } from "./rules.mjs";
 
 function fail(message, status=400) { return Object.assign(new Error(message), {status}); }
 export function parseIntake(text) {
@@ -166,7 +167,10 @@ export async function submitRequirement(root, draft, execute=run) {
     // 分配 TASK 编号并写入 catalog：这样 issue 才能被 dashboard 识别
     const taskId=await nextTaskId(root);
     await writeTaskFile(root, taskId, draft);
-    const result=await execute("gh",["issue","create","--title",`[${draft.milestone}] [${taskId}] ${draft.assessment.title}`,"--body-file",path,"--label",draft.ready ? "agent:ready" : "agent:blocked"],{cwd:root,timeoutMs:45000});
+    const title = issueTitle(draft.milestone, taskId, draft.assessment.title);
+      const titleError = validateIssueTitle(title);
+      if (titleError) throw fail("issue-title-invalid", 400);
+      const result=await execute("gh",["issue","create","--title",title,"--body-file",path,"--label",draft.ready ? TASK_STATE.ready : TASK_STATE.blocked],{cwd:root,timeoutMs:45000});
     const url=result.stdout.trim();
     if (!/^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/.test(url)) throw fail("submit-result-unknown",503);
     // 回写 issue 号：checkpoint 按 issue 号存，任务文件按 TASK 号存，

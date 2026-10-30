@@ -86,3 +86,11 @@ test("Pi 子进程实际收到 Agent 会话标记，且拿不到提权", { skip:
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("Agent 会话的 gh 被隔离到空配置目录，无法借 keyring 写 GitHub", async () => {
+  const rpc = await readSrc("rpc.mjs");
+  // gh 的凭据在 keyring / hosts.yml，删环境变量无效（实测 gh auth status 仍通过）。
+  assert.match(rpc, /env\.GH_CONFIG_DIR = isolated/, "必须把 GH_CONFIG_DIR 指向隔离目录");
+  assert.match(rpc, /delete env\[key\]/, "仍要清掉环境变量里的 token");
+  assert.match(rpc, /SOXU_AGENT_GH_CONFIG_DIR/, "隔离目录要允许显式覆盖，便于排查");
+});
