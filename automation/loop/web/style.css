@@ -726,3 +726,7 @@ body.dragging-draft .queue-item{cursor:grabbing}
 .task-state[data-state=completed],
 .task-state[data-state=archived] { color: #78d0ac; }
 
+
+/* 已完成任务不显示阶段：保留占位以维持 grid 列宽，视觉上整体隐藏 */
+.task-stage[data-empty="1"] { visibility: hidden; }
+

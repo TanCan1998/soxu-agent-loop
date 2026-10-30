@@ -305,7 +305,8 @@ test("project milestones derive dynamic task counts and live evidence",async()=>
   const snapshot={...STATUS,runner:{command:"once",startedAt:"2026-10-27T00:00:00Z"},taskPhases:[{taskId:3,status:"running"}],github:{status:"ok",updatedAt:"2026-10-27T00:00:00Z",tasks:{__roadmap:{stages,unclassified:2,limited:false}}}};
   const app=page({handler:()=>({ok:true,status:200,json:async()=>snapshot})});
   app.elements.token.value=TOKEN;app.elements.connect.dispatch("click");await tick();
-  assert.equal(app.elements.projectPhaseTitle.textContent,"1 个里程碑正在推进");
+  // 标题改为并列陈述：running / paused / 待核实 / 归类待确认 各自计数
+  assert.equal(app.elements.projectPhaseTitle.textContent,"1 个正在推进 · 1 个暂停或阻塞 · 1 个归类待确认");
   assert.equal(app.elements.projectPhaseCount.textContent,"2 / 4 项已合入");
   assert.equal(app.elements.roadmapCards.children[1].dataset.status,"running");
   app.elements.roadmapCards.children[1].dispatch("click");

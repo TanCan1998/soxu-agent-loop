@@ -507,9 +507,11 @@ function renderTasks(data) {
     // 已完成/已归档的任务显示阶段反而自相矛盾（曾出现「已合入 · 待归档」配「尚未开始」：
     // checkpoint 按 issue 号存、这里按 TASK 号查，永远查不到，phase 就退化成 null）。
     const finished = displayState === "completed" || displayState === "archived";
-    card.append(status,
-      element("div", finished ? "—" : (phaseLabels[task.phase] || task.phase || "尚未开始"), "task-stage"),
-      element("div", timeText, "task-time"));
+    // 已完成的任务不显示阶段：保留占位元素以免 grid 错位，但用 visibility 隐藏，
+    // 连「阶段」这两个字的伪元素一起藏掉。
+    const stage = element("div", finished ? "" : (phaseLabels[task.phase] || task.phase || "尚未开始"), "task-stage");
+    if (finished) stage.dataset.empty = "1";
+    card.append(status, stage, element("div", timeText, "task-time"));
     const taskId = "TASK-" + String(task.id).padStart(3,"0");
     const remote = data.github?.status === "ok" ? data.github.tasks?.[taskId] : null;
     const details = [];
