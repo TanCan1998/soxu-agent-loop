@@ -896,10 +896,21 @@ function copyButton(text, label) {
   button.setAttribute("aria-label",label);setTip(button,label);
   button.addEventListener("click",()=>void copyText(text));return button;
 }
+/**
+ * 报告分段：结构化的 finding（含 impact/action/evidence），而不是拼成一大段文本。
+ * 渲染侧据此做折叠 + 懒加载——一份 15KB 的报告全量渲染会产生数百个节点，
+ * 打开对话框时明显卡顿。
+ */
 function reportParts(report) {
-  const parts=[{title:"摘要",text:report.summary}];
-  for(const f of report.findings) parts.push({title:f.title,text:f.recommendation+"\n置信度："+f.confidence+"\n证据："+(f.evidence.join("；") || "未提供")});
-  if(report.unknowns.length) parts.push({title:"待核实",text:report.unknowns.join("\n")});
+  const parts=[{kind:"summary",title:"摘要",text:report.summary}];
+  for(const f of report.findings) parts.push({
+    kind:"finding", title:f.title, confidence:f.confidence,
+    impact:f.impact ?? "", action:f.action ?? f.recommendation ?? "",
+    evidence:Array.isArray(f.evidence) ? f.evidence : [],
+    // 兼容旧报告：没有 impact/action 时退回拼接文本
+    legacy:!f.action && !f.recommendation ? "" : null,
+  });
+  if(report.unknowns?.length) parts.push({kind:"unknowns",title:"待核实",items:report.unknowns});
   return parts;
 }
 async function loadAdvisory(lane, selected=null) {
@@ -918,7 +929,37 @@ async function loadAdvisory(lane, selected=null) {
     const {report}=await api("/api/advisory-reports?lane="+lane+"&name="+encodeURIComponent(name));
     currentReports[lane]=report;
     node.replaceChildren();node.append(element("p","未经核实的模型建议"+(report.createdAt ? " · "+new Date(report.createdAt).toLocaleString() : ""),"notice"));
-    for(const part of reportParts(report)) {const block=element("div",undefined,"assessment-block");const head=element("div",undefined,"report-heading");head.append(element("strong",part.title),copyButton(part.title+"\n"+part.text,"复制"+part.title));block.append(head,element("p",part.text));node.append(block);}
+    for(const part of reportParts(report)) {
+      if(part.kind==="finding") {
+        // 折叠 + 懒加载：内容只在首次展开时构建，初始只渲染标题行。
+        const details=element("details",undefined,"assessment-block");
+        const summary=element("summary",undefined,"report-heading");
+        summary.append(element("strong",part.title));
+        if(part.confidence) { const badge=element("span",part.confidence,"confidence-badge"); badge.dataset.level=part.confidence; summary.append(badge); }
+        details.append(summary);
+        details.addEventListener("toggle",()=>{
+          if(!details.open || details.dataset.filled==="1") return;
+          details.dataset.filled="1";
+          const body=element("div",undefined,"assessment-body");
+          if(part.impact) body.append(element("p","影响："+part.impact));
+          if(part.action) body.append(element("p","建议："+part.action));
+          if(part.evidence.length) {
+            const ul=element("ul",undefined,"evidence-list");
+            for(const item of part.evidence) ul.append(element("li",item));
+            body.append(ul);
+          }
+          details.append(body);
+        });
+        node.append(details);
+        continue;
+      }
+      const block=element("div",undefined,"assessment-block");
+      const head=element("div",undefined,"report-heading");
+      const text=part.kind==="unknowns" ? part.items.join("\n") : part.text;
+      head.append(element("strong",part.title),copyButton(part.title+"\n"+text,"复制"+part.title));
+      block.append(head,element("p",text));
+      node.append(block);
+    }
   } catch(error) {currentReports[lane]=null;node.replaceChildren(element("p","报告读取失败："+error.message,"error-text"));}
 }
 async function deleteAdvisory(lane, all) {

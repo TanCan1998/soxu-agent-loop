@@ -368,3 +368,18 @@ body.dragging-draft .queue-item{cursor:grabbing}
   .top .page-nav button{flex:0 0 auto;padding:5px 10px}
   .global-run{flex:0 0 auto}
 }
+
+/* ── 三轨报告：折叠 + 懒加载 ── */
+.assessment-block summary { cursor: pointer; user-select: none; list-style: none; }
+.assessment-block summary::-webkit-details-marker { display: none; }
+.assessment-block summary::before { content: "▸"; display: inline-block; margin-right: 6px; opacity: .6; transition: transform .15s var(--ease, ease); }
+.assessment-block[open] > summary::before { transform: rotate(90deg); }
+.confidence-badge { margin-left: 8px; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--border); font-size: 11px; color: var(--muted); }
+.confidence-badge[data-level="high"] { color: #78d0ac; border-color: #78d0ac66; }
+.confidence-badge[data-level="medium"] { color: #d7a53c; border-color: #d7a53c66; }
+.confidence-badge[data-level="low"] { color: var(--muted); border-color: var(--border); }
+.assessment-body { padding: 8px 0 0 18px; font-size: 13px; line-height: 1.6; }
+.assessment-body p { margin: 4px 0; overflow-wrap: anywhere; }
+.evidence-list { margin: 8px 0 0; padding-left: 18px; font-size: 12px; color: var(--muted); }
+.evidence-list li { margin-bottom: 5px; overflow-wrap: anywhere; }
+
