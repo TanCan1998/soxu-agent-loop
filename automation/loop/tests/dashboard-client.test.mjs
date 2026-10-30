@@ -547,7 +547,9 @@ test("milestone header lists active tasks, or upcoming ones when nothing is acti
   assert.equal(chip.className, "phase-task-chip");
   assert.equal(chip.textContent, "实现网络重试策略与超时预算（很长很长的标题）");
   assert.equal(chip.getAttribute("data-tip"), "#4 实现网络重试策略与超时预算（很长很长的标题）");
-  assert.equal(app.elements.projectPhaseTasks.children.length, 2, "only active tasks are chipped");
+  // label + chip + 「共 N 条」尾部统计
+  assert.equal(app.elements.projectPhaseTasks.children.length, 3, "only active tasks are chipped");
+  assert.equal(app.elements.projectPhaseTasks.children[2].textContent, "共 1 条");
 
   const idle = { ...running, tasks:[{id:6,title:"待开始任务",status:"pending"}] };
   const view = page({ handler: () => ({ ok:true, status:200, json: async () => idle }) });
