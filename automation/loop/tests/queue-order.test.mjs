@@ -35,12 +35,12 @@ test("doneTaskIds reads archived task ids", async () => {
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-function ghStub({ state = "OPEN", body = "dependencies: [TASK-099]" } = {}) {
+function ghStub({ state = "OPEN", body = "dependencies: [TASK-099]", labels = [] } = {}) {
   const calls = [];
   const execute = async (bin, args) => {
     calls.push(bin + " " + args.join(" "));
     if (args[0] === "issue" && args[1] === "view") {
-      return { stdout: JSON.stringify({ number: 42, title: "[M2] [ISSUE-42] 示例", body, labels: [], state }) };
+      return { stdout: JSON.stringify({ number: 42, title: "[M2] [ISSUE-42] 示例", body, labels: labels.map(name => ({ name })), state }) };
     }
     return { stdout: "" };
   };
@@ -68,6 +68,34 @@ test("setIssueReady applies the label once dependencies are archived", async () 
     const result = await setIssueReady(root, 42, true, { execute });
     assert.equal(result.ok, true);
     assert.ok(calls.some(c => c.includes("--add-label agent:ready")), "label is applied");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("setIssueReady clears other state labels so only one remains", async () => {
+  const root = await temp();
+  try {
+    await mkdir(join(root, "tasks", "done"), { recursive: true });
+    const { execute, calls } = ghStub({ body: "", labels: ["agent:waiting", "agent:blocked", "bug"] });
+    const result = await setIssueReady(root, 42, true, { execute });
+    assert.equal(result.ok, true);
+    const edit = calls.find(c => c.includes("issue edit"));
+    assert.ok(edit.includes("--add-label agent:ready"), "adds ready");
+    assert.ok(edit.includes("--remove-label agent:waiting"), "removes waiting");
+    assert.ok(edit.includes("--remove-label agent:blocked"), "removes blocked");
+    assert.ok(!edit.includes("--remove-label bug"), "non-state labels are untouched");
+    assert.deepEqual(result.removed.sort(), ["agent:blocked", "agent:waiting"]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("setIssueReady does not re-add an existing ready label", async () => {
+  const root = await temp();
+  try {
+    await mkdir(join(root, "tasks", "done"), { recursive: true });
+    const { execute, calls } = ghStub({ body: "", labels: ["agent:ready", "agent:paused"] });
+    await setIssueReady(root, 42, true, { execute });
+    const edit = calls.find(c => c.includes("issue edit"));
+    assert.ok(!edit.includes("--add-label"), "already ready, no add");
+    assert.ok(edit.includes("--remove-label agent:paused"), "still clears the conflicting state");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
