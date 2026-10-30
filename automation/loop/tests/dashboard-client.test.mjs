@@ -868,6 +868,21 @@ test("the publish menu gates release on dev being merged into main", async () =>
   assert.match(portable.elements.publishRelease.getAttribute("data-tip"), /PR/);
 });
 
+test("publish failures explain themselves in plain language", async () => {
+  const view = page({ handler: path => path === "/api/publish"
+    ? { ok: false, status: 409, json: async () => ({ error: "external-runner-active" }) }
+    : response() });
+  view.elements.token.value = TOKEN;
+  view.elements.connect.dispatch("click");
+  await tick();
+  view.elements.publishPreview.dispatch("click");
+  await tick();
+  await tick();
+  assert.match(view.elements.toast.textContent, /外部 Runner/);
+  // 保留原始错误码，便于按日志排查。
+  assert.match(view.elements.toast.textContent, /external-runner-active/);
+});
+
 test("the publish bubble closes when clicking outside it", async () => {
   const view = page();
   view.elements.token.value = TOKEN;

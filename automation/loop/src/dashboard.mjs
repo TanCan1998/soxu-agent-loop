@@ -544,6 +544,8 @@ export class DashboardCoordinator extends EventEmitter {
     if (this.reserved || this.active) throw Object.assign(new Error("runner-busy"), { status: 409 });
     this.reserved = true;
     try {
+      // 外部 Runner 正在跑同一个 checkout 时发布，会和它的 git/tag 操作抢引用。
+      if ((await inspectExternalLocks(this.root)).active) throw Object.assign(new Error("external-runner-active"), { status: 409 });
       const result = await publishVersion(mode);
       this.push(`Publish ${mode}: ${result.status} ${result.tag ?? ""}`.trim());
       this.publishCheckedAt = 0;

@@ -123,6 +123,17 @@ test("existing live worktree lock blocks dashboard-owned runner",async()=>{
   }finally{await cleanup(root,coordinator);}
 });
 
+test("an external runner lock blocks the publish button before any git or gh call",async()=>{
+  const root=await fixture();
+  const coordinator=new DashboardCoordinator({root,githubStatus});
+  try{
+    await mkdir(join(root,".soxu","locks"),{recursive:true});
+    await writeFile(join(root,".soxu","locks","github-issue-1.lock"),JSON.stringify({pid:process.pid}));
+    await assert.rejects(()=>coordinator.publishVersion("preview"),error=>error.status===409&&error.message==="external-runner-active");
+    assert.equal(coordinator.reserved,false,"a rejected publish must not leave the coordinator reserved");
+  }finally{await cleanup(root,coordinator);}
+});
+
 test("start replaces the old once/resume entries and per-task recovery is gone", async()=>{
   const root=await fixture(), children=[];
   const spawn=(file,args)=>{const child=new EventEmitter();child.connected=true;child.stdout=new PassThrough();child.stderr=new PassThrough();child.send=()=>{};children.push({args,child});return child;};
