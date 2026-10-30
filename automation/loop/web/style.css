@@ -707,3 +707,12 @@ body.dragging-draft .queue-item{cursor:grabbing}
   margin-right: 18px;
 }
 
+
+/* 排序写入期间：手柄置灰并禁止拖动 */
+#queueList[data-reordering] .drag-handle,
+.drag-handle[data-locked="1"] {
+  opacity: .35;
+  cursor: default;
+  pointer-events: none;
+}
+

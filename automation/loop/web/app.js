@@ -1585,6 +1585,7 @@ $("batchDrafts").addEventListener("click",async()=>{const ids=[...selectedDrafts
   const onUp = async () => {
     if (!drag) return;
     const active = drag.active;
+    const beforeOrder = drag.beforeOrder ?? [];
     drag.row.classList.remove("dragging", "drop-target");
     drag = null;
     document.body?.classList.remove("dragging-draft");
@@ -1595,19 +1596,34 @@ $("batchDrafts").addEventListener("click",async()=>{const ids=[...selectedDrafts
     const order = [...(list.querySelectorAll?.("[data-issue-number]") ?? [])]
       .map(r => Number(r.getAttribute("data-issue-number")))
       .filter(n => Number.isSafeInteger(n) && n > 0);
+    // 顺序没变就不发请求，避免无意义的写入和一次多余的刷新
+    if (order.length === beforeOrder.length && order.every((n, i) => n === beforeOrder[i])) return;
+    // 写入期间锁住所有手柄：置灰 + 屏蔽指针，防止半途再拖导致前后端顺序错位
+    list.dataset.reordering = "1";
+    const handles = [...(list.querySelectorAll?.("[data-drag-handle]") ?? [])];
+    for (const h of handles) h.dataset.locked = "1";
     try {
       await api("/api/queue-reorder", { method: "POST", body: { order } });
       lastQueueKey = "";
       notice("需求顺序已保存，agent 会按此顺序认领。");
       await refresh();
     } catch (error) { notice("保存顺序失败：" + error.message); }
+    finally {
+      for (const h of handles) delete h.dataset.locked;
+      delete list.dataset.reordering;
+    }
   };
   list.addEventListener("pointerdown", event => {
     const handle = event.target?.closest?.("[data-drag-handle]");
     const row = handle?.closest?.("[data-issue-number]");
     if (!row || row.dataset.draggable !== "1") return;
+    if (handle.dataset.locked === "1") return; // 上一次排序还在写入
     event.preventDefault?.();
-    drag = { row, pointerId: event.pointerId ?? null, startY: event.clientY, active: false };
+    // 记下拖拽前的顺序，用于判断是否真的移动过
+    const beforeOrder = [...(list.querySelectorAll?.("[data-issue-number]") ?? [])]
+      .map(r => Number(r.getAttribute("data-issue-number")))
+      .filter(n => Number.isSafeInteger(n) && n > 0);
+    drag = { row, pointerId: event.pointerId ?? null, startY: event.clientY, active: false, beforeOrder };
     window.addEventListener("pointermove", onMove, { passive: false });
     window.addEventListener("pointerup", onUp);
     window.addEventListener("pointercancel", onUp);
