@@ -447,6 +447,11 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
                     "- Keep the resolution narrow: no unrelated formatting, dependency updates or refactors.",
                     "- If the two sides made incompatible product decisions, STOP and explain instead of guessing.",
                     "- Inspect git status and git ls-files -u to find remaining unmerged entries.",
+                    "- When both sides added similar things (imports, state fields, modules), merge structurally:",
+                    "  deduplicate, close every brace, and verify the enclosing function still ends where it should.",
+                    "  Naive \"keep both\" concatenation produces broken syntax even when each side was valid.",
+                    "- After resolving, run the project's build command (vite build), not just the type check:",
+                    "  template syntax errors are invisible to vue-tsc but fatal to the Vue compiler.",
                     "When finished, stage resolved paths, keep the task working, and run relevant tests.",
                     state.feedback ?? "",
                   ].filter(line => line !== "").join("\n")
@@ -475,6 +480,20 @@ export async function processIssue(issue, { policy, local = false, dryRun = fals
         case "postConflictInstall":
           // Package manifests may have been conflicted, so install only AFTER Pi resolves them.
           if (await unresolved()) throw new Error("Unmerged index remains after Developer resolution");
+          // 冲突标记哨兵：Developer 声称解决 ≠ 真解决干净。粗心的"保留双方"
+          // 或脚本合并最常见的就是残留 <<<<<<< 标记（有时藏在嵌套深处）。
+          // 这里拦一次，把失败成本从 CI（几分钟）降到本地（秒级）。
+          // --untracked：Developer 新建的文件也必须查（默认只搜已跟踪文件）。
+          // exitCode: 0=有命中（坏），1=无命中（好），其他=grep 自身出错。
+          {
+            const markers = await run("git",
+              ["grep", "--untracked", "-I", "-l", "<<<<<<< HEAD", "--", ":(exclude)*.lock"],
+              { cwd: wt.directory, timeoutMs: 60000, signal, allowFailure: true });
+            if (markers.exitCode === 0 && String(markers.stdout ?? "").trim()) {
+              throw new Error("Conflict markers remain after resolution:\n" + String(markers.stdout).trim());
+            }
+            if (markers.exitCode > 1) throw new Error("conflict-marker scan failed: " + (markers.stderr ?? ""));
+          }
           await run("pnpm", ["install", "--no-frozen-lockfile", "--ignore-scripts"], {
             cwd: wt.directory, timeoutMs: policy.timeouts.installMinutes * 60000, signal,
           });
