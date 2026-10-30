@@ -594,5 +594,5 @@ body.dragging-draft .queue-item{cursor:grabbing}
 /* 新增状态：部分任务待核实（已关闭但找不到合入记录） */
 .milestone-card[data-status=unverified] { border-color: color-mix(in srgb, var(--muted) 45%, transparent); }
 .milestone-card[data-status=unverified] .milestone-state { color: var(--muted); }
-.milestone-card[data-status=unverified] .milestone-fill { background: color-mix(in srgb, var(--accent) 55%, var(--muted)); }
+/* 进度条颜色不随状态变化：只有 completed 用绿色（既有规则），其余保持 accent 蓝 */
 
