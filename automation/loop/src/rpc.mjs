@@ -29,8 +29,8 @@ export function parseReview(text) {
   return result;
 }
 
-function safeEnvironment() {
-  const env = { ...process.env };
+function safeEnvironment(extra = {}) {
+  const env = { ...process.env, ...extra };
   // Agent 会话标记：SOXU 的 pre-commit 会据此拒绝直接 git commit，
   // 强制改动留在工作区由 Runner 提交（否则会绕过 testedTree/reviewedTree 校验）。
   // 同时清掉提权标记，绝不让 Agent 继承 Runner 的提交权限。
@@ -82,7 +82,7 @@ export function resolvePiTimeouts({ timeoutMs, timeouts = {} } = {}) {
  * the idle window but never the hard deadline. Quota/network errors are returned
  * to the coordinator; this function never automatically replays a paid prompt.
  */
-export async function runPi({ cwd, prompt, timeoutMs, timeouts, onEvent = () => {}, signal, modelSelection, readOnly = false, intakeReadTools = false, webResearch = false,
+export async function runPi({ cwd, prompt, timeoutMs, timeouts, onEvent = () => {}, signal, modelSelection, readOnly = false, intakeReadTools = false, webResearch = false, env = {},
   idleExtensionSeconds = IDLE_EXTENSION_DEFAULT_SECONDS, slowCommandPrefixes = SLOW_COMMAND_DEFAULTS } = {}) {
   const extensionSeconds = idleExtensionSeconds;
   const prefixes = slowCommandPrefixes;
@@ -93,7 +93,7 @@ export async function runPi({ cwd, prompt, timeoutMs, timeouts, onEvent = () => 
   const argv = piArgv(modelSelection, readOnly, intakeReadTools, webResearch);
   // Windows .cmd resolution requires cmd.exe; identifiers are strictly validated above.
   const child = spawn(win ? "cmd.exe" : binary, win ? ["/d", "/s", "/c", `${binary} ${argv.join(" ")}`] : argv, {
-    cwd, env: safeEnvironment(), windowsHide: true, detached: !win, stdio: ["pipe", "pipe", "pipe"]
+    cwd, env: safeEnvironment(env), windowsHide: true, detached: !win, stdio: ["pipe", "pipe", "pipe"]
   });
   const decoder = new StringDecoder("utf8");
   let stderr = "", text = "", finalAssistant = "", accepted = false, settled = false, handled = false, finished = false, closed = false;
