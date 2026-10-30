@@ -183,7 +183,9 @@ function mountScrollIndicator(scroller = null) {
   const sync = () => {
     // 指示条始终 fixed 定位：容器滚动时 rect 不变，滚动只改变 thumb 的偏移。
     const { rect, top, view, total, visibleArea } = metrics();
-    if (!Number.isFinite(view) || !Number.isFinite(total) || view <= 0) return;
+    // 容器不可见时必须先摘掉 visible 再退出。
+    // 弹窗关闭后 .model-groups 高度归零，若直接 return，指示条会留在页面上。
+    if (!Number.isFinite(view) || !Number.isFinite(total) || view <= 0) { bar.classList.remove("visible"); return; }
     if (total <= view + 2 || visibleArea < 40) { bar.classList.remove("visible"); return; }
     const track = visibleArea - 8;
     const height = Math.max(28, Math.round(track * view / total));
@@ -272,6 +274,12 @@ function mountScrollIndicators() {
 }
 /** 弹窗开合会改变容器位置，重算一次指示条。 */
 function refreshScrollIndicators() { for (const sync of scrollIndicators) sync(); }
+// 关闭弹窗后必须重算：弹窗内的滚动会让指示条带上 visible，
+// 而 closeDialog 有多条退出路径（正常退场 / 强制关闭 / 已关闭直接返回），
+// 逐个补调用容易漏。close 事件不冒泡，用捕获阶段统一接住。
+document.addEventListener("close", event => {
+  if (event.target instanceof HTMLDialogElement) refreshScrollIndicators();
+}, true);
 /** 点击是否落在弹窗盒子之外（背板）。点击弹窗内边距不算外部，避免误关。 */
 function clickedOutside(dialog, event) {
   if (event.target !== dialog) return false;
