@@ -76,7 +76,7 @@ function node() {
 }
 function page({ storage = new Map(), handler = () => response(), hidden = false, preferences = new Map(), streamSupport = false, navigatorClipboard, execCommand = () => false, secureContext, confirmResult = true, promptResult = null } = {}) {
   const ids = [
-    "milestoneDialog", "milestoneTitle", "milestoneDetails", "closeMilestone", "token", "tokenLabel", "authPanel", "authNotice", "connect", "notice", "toast", "globalRun", "running", "pending", "done",
+    "milestoneDialog", "milestoneTitle", "milestoneDetails", "closeMilestone", "token", "tokenLabel", "authPanel", "authNotice", "connect", "notice", "toast", "copyFallbackDialog", "copyFallbackText", "closeCopyFallback", "globalRun", "running", "pending", "done",
     "total", "badge", "runner", "updated", "stop", "tasks", "logs", "refresh", "copyLogs", "intakeRunState", "productReports", "productCopy", "productDelete", "productClear", "qualityReports", "qualityCopy", "qualityDelete", "qualityClear",
     "navOverview", "navExecution", "navMonitor", "navRequirements", "navLanes", "navModels", "pageOverview", "pageExecution", "pageMonitor", "pageRequirements", "pageLanes", "pageModels", "modelSummary", "openModels", "closeModels", "reloadModels", "saveModels", "modelScope", "modelSearch", "modelInherit", "modelDialog", "modelGroups", "modelMessage", "logLimit", "logFilter", "followLogs", "logCount", "agentCards", "githubStatus", "autoMerge", "updateStatus", "updateTool", "taskFilters", "draftFilters", "milestoneFilters", "projectPhaseTasks",
     "publishButton", "publishMenu", "publishPreview", "publishRelease", "publishHint", "tip", "restartOverlay",
@@ -440,7 +440,10 @@ test("copy reports a manual hint when the browser blocks every clipboard path", 
   await tick();
   app.elements.copyLogs.dispatch("click");
   await tick();
-  assert.match(app.elements.toast.textContent, /长按选择文本/);
+  // 两条路都失败时不再只给一句提示，而是弹出可手动复制的文本框
+  assert.match(app.elements.toast.textContent, /禁止自动复制/);
+  assert.equal(app.elements.copyFallbackDialog.open, true, "fallback dialog opens");
+  assert.match(app.elements.copyFallbackText.value, /lan-message/, "text is placed for manual copy");
 });
 
 test("completed requirements are grouped in a collapsed section", async () => {

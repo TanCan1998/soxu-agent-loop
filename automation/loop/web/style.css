@@ -986,3 +986,57 @@ body.dragging-draft .queue-item{cursor:grabbing}
   .toast { bottom: 20px; font-size: 13.5px; padding: 12px 18px; }
 }
 
+
+/* ── toast 进入 top layer ──
+   dialog.showModal() 把弹窗提到 top layer，那里 z-index 无效；
+   普通 fixed 元素会被 dialog 与其 backdrop（含 blur）盖住。
+   用 popover 让 toast 同样进入 top layer，后显示者在上。 */
+.toast[popover] {
+  position: fixed;
+  inset: auto;
+  left: 50%;
+  bottom: 28px;
+  margin: 0;
+  width: max-content;
+  max-width: min(560px, calc(100vw - 40px));
+  padding: 10px 18px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 92%, var(--accent));
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: center;
+  box-shadow: 0 12px 32px -10px rgba(0, 0, 0, .7);
+  transform: translate(-50%, 12px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .22s ease, transform .22s cubic-bezier(.16,.84,.34,1);
+}
+.toast[popover]::backdrop { display: none; background: transparent; }
+.toast[popover][data-show="1"] { opacity: 1; transform: translate(-50%, 0); }
+@media (pointer: coarse) {
+  .toast[popover] { bottom: 20px; font-size: 13.5px; padding: 12px 18px; }
+}
+
+
+/* 手动复制兜底弹窗 */
+.copy-fallback-text {
+  width: 100%;
+  height: min(300px, 45vh);
+  resize: vertical;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.55;
+  padding: 10px 12px;
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--subtle);
+  color: var(--text);
+  outline: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.copy-fallback-text:focus { border-color: var(--accent); }
+
