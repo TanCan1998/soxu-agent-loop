@@ -721,3 +721,8 @@ body.dragging-draft .queue-item{cursor:grabbing}
 .task-state[data-state=completed] { color: #78d0ac; }
 .task-state[data-state=archived] { color: var(--muted); }
 
+
+/* 完成态统一绿色：已归档与已合入待归档表达的是同一件事 */
+.task-state[data-state=completed],
+.task-state[data-state=archived] { color: #78d0ac; }
+

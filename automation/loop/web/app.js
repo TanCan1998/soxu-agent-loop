@@ -503,7 +503,12 @@ function renderTasks(data) {
     const timeText = stamp && !Number.isNaN(stamp.getTime())
       ? pad(stamp.getMonth() + 1) + "-" + pad(stamp.getDate()) + " " + pad(stamp.getHours()) + ":" + pad(stamp.getMinutes())
       : "—";
-    card.append(status, element("div", phaseLabels[task.phase] || task.phase || "尚未开始", "task-stage"),
+    // 阶段只对「还在执行」的任务有意义。
+    // 已完成/已归档的任务显示阶段反而自相矛盾（曾出现「已合入 · 待归档」配「尚未开始」：
+    // checkpoint 按 issue 号存、这里按 TASK 号查，永远查不到，phase 就退化成 null）。
+    const finished = displayState === "completed" || displayState === "archived";
+    card.append(status,
+      element("div", finished ? "—" : (phaseLabels[task.phase] || task.phase || "尚未开始"), "task-stage"),
       element("div", timeText, "task-time"));
     const taskId = "TASK-" + String(task.id).padStart(3,"0");
     const remote = data.github?.status === "ok" ? data.github.tasks?.[taskId] : null;
