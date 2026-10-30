@@ -5,6 +5,7 @@ import { run } from "./process.mjs";
 import { readCheckpoint, writeCheckpoint } from "./checkpoint.mjs";
 import { taskIdFromIssueTitle } from "./task-catalog.mjs";
 import { runnerStatus } from "./runner-state.mjs";
+import { completeMergedIssue } from "./lifecycle.mjs";
 import {
   archiveCommitSubject,
   closingReferences,
@@ -13,28 +14,6 @@ import {
 } from "./rules.mjs";
 const samePath = (a,b) => process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 
-// Cleanup is restricted to Runner-owned GitHub tasks with an exact merged PR head.
-/** 合入集成分支后关闭 Issue（幂等；结果缓存在检查点里，避免每轮都问 GitHub）。 */
-async function closeMergedIssue(exec, state, n, base) {
-  // "closed"：本函数关闭并已清标签；"already-closed-clean"：GitHub 自动关闭后已补清标签。
-  // 两种终态都不再重复查询 GitHub；中间态 "already-closed" 只存在于旧检查点，会再查一次。
-  if (state.issueClosed === "closed" || state.issueClosed === "already-closed-clean") return "cached";
-  try {
-    // 一次调用同时取 state 与 labels：PR 正文的 Closes #N 会让 GitHub 自动关闭 Issue，
-    // 那条路径不经过本函数，旧版因此在已关闭 Issue 上残留 agent:* 标签
-    // （需要人工清理，见 2026-11-02 的 8 个 Issue）。标签清理必须与关闭动作解耦。
-    const view = JSON.parse((await exec("gh", ["issue", "view", String(n), "--json", "state,labels"])).stdout);
-    const stale = (view.labels ?? []).map(x => x.name).filter(name => STALE_AFTER_MERGE_LABELS.includes(name));
-    if (stale.length) await exec("gh", ["issue", "edit", String(n), ...stale.flatMap(name => ["--remove-label", name])]);
-    if (view.state !== "OPEN") {
-      state.issueClosed = "already-closed-clean";
-      return "already-closed";
-    }
-    await exec("gh", ["issue", "close", String(n), "--comment", `已合入集成分支 ${base}；release 发布到 main 后随版本生效。`]);
-    state.issueClosed = "closed";
-    return "closed";
-  } catch { return "unknown"; }
-}
 /**
  * 把任务文件从 tasks/backlog 归档到 tasks/done。
  *
@@ -101,7 +80,7 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
       // 这里补一次归档（archiveTaskFile 内部幂等）
       try { await archiveTaskFile(root, execAtRoot, state, Number(id), { deferWhenRunnerActive }); }
       catch (e) { log(`Merged cleanup #${id}: 任务文件归档失败（${e?.message ?? e}），下次重试。`); }
-      const closedState = await closeMergedIssue(execAtRoot, state, Number(id), base);
+      const closedState = await completeMergedIssue(execAtRoot, state, Number(id), base);
       if(closedState === "closed" || closedState === "already-closed") await writeCheckpoint(state, checkpointDir);
       continue;
     }
@@ -218,7 +197,7 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
       if(complete) {
       try { result.archivedTask = await archiveTaskFile(root, exec, fresh, n, { deferWhenRunnerActive }); }
       catch (e) { log(`Merged cleanup #${n}: 任务文件归档失败（${e?.message ?? e}），下次重试。`); }
-      result.issueClosed = await closeMergedIssue(exec, fresh, n, base);
+      result.issueClosed = await completeMergedIssue(exec, fresh, n, base);
       if(result.issueClosed === "closed" || result.issueClosed === "already-closed") await writeCheckpoint(fresh, checkpointDir);
     }
       results.push(result);

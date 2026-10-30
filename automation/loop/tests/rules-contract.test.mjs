@@ -14,6 +14,7 @@ import { pathToFileURL } from "node:url";
 import { ROOT } from "../src/config.mjs";
 import * as rules from "../src/rules.mjs";
 import { ghCommandAllowed } from "../src/process.mjs";
+import { staleLabels } from "../src/lifecycle.mjs";
 
 const souxCheckIssueTitle = join(ROOT, "scripts", "check-issue-title.mjs");
 const souxCheckCommitMsg = join(ROOT, "scripts", "check-commit-msg.mjs");
@@ -84,6 +85,15 @@ test("标签常量只有 rules.mjs 一处定义，其它源码不得再写 agent
     if (literal) offenders.push(file + " -> " + literal[0]);
   }
   assert.deepEqual(offenders, [], "以下文件仍在硬编码标签字面量，请改用 rules.mjs 的 TASK_STATE/LABELS：" + offenders.join(", "));
+});
+
+test("完成态只清未完成标签，agent:release 等非状态标签保持不动", () => {
+  assert.deepEqual(
+    staleLabels([{ name: "agent:pr" }, { name: "agent:ready" }, { name: "agent:release" }, { name: "enhancement" }]).sort(),
+    ["agent:pr", "agent:ready"],
+  );
+  assert.deepEqual(staleLabels([]), []);
+  assert.deepEqual(staleLabels([{ name: "agent:release" }]), []);
 });
 
 test("gh 白名单只放行任务生命周期需要的命令", () => {

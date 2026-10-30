@@ -14,6 +14,7 @@
 | --- | --- | --- | --- |
 | 参数与内容 | **目标项目** | 项目事实：哪些路径受保护、跑什么检查命令、分支名、预算、模型路由、任务定义、Agent 上下文 | `automation/policy.json`、`automation/agent-models.json`、`AGENTS.md`、`agents/policies/*.md`、`tasks/*` |
 | 工具行为规则 | **loop** | loop 自己怎么操作 GitHub 与 Git：状态标签语义、Issue/PR 标题语法、关闭引用、提交主题、分支命名、归档流程 | `automation/loop/src/rules.mjs` |
+| 生命周期意图 | **loop** | 调用方只表达「已合并 / 已交付 / 已暂停」，由 `lifecycle.mjs` 决定清哪些标签、是否关闭 Issue、写什么注释 | `automation/loop/src/lifecycle.mjs` |
 | 仓库守卫 | **目标项目** | 守住本仓库的历史与 PR 门槛（人工提交也要过），属于镜像而非定义 | SOXU 的 `scripts/check-issue-title.mjs`、`scripts/check-commit-msg.mjs` |
 
 为什么守卫必须留在目标项目：GitHub Actions 只能跑在 PR 所在仓库，
