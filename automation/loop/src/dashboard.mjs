@@ -389,7 +389,8 @@ export class DashboardCoordinator extends EventEmitter {
     await this.intake.initialized;
     await this.drafts.initialized;
     const [progress, externalLockInfo, modelInfo] = await Promise.all([
-      localProgress(this.root, id => readCheckpoint(id, join(dataRoot(this.root), "checkpoints"))),
+      localProgress(this.root, id => readCheckpoint(id, join(dataRoot(this.root), "checkpoints")),
+        { checkpointDir: join(dataRoot(this.root), "checkpoints") }),
       inspectExternalLocks(this.root),
       Promise.all([readModelSettings(this.root),loadRoleModels(process.env,{root:this.root})]).then(([settings,selected])=>({status:"ok",settings,selected,envOverrides:{developer:Boolean(process.env.SOXU_DEVELOPER_PROVIDER || process.env.SOXU_DEVELOPER_MODEL),reviewer:Boolean(process.env.SOXU_REVIEWER_PROVIDER || process.env.SOXU_REVIEWER_MODEL)}})).catch(()=>({status:"unavailable"})),
     ]);

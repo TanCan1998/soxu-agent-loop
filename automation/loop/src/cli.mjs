@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { ROOT, policy as loadPolicy, integrationBase } from "./config.mjs";
+import { ROOT, policy as loadPolicy, integrationBase, dataRoot } from "./config.mjs";
 import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { run, git } from "./process.mjs";
@@ -242,7 +242,8 @@ switch (command) {
     if(results.some(x=>["error","invalid-checkpoint"].includes(x.status))) process.exitCode=1; break; }
   case "doctor": await doctor(); break;
   case "status": {
-    const snapshot = await localProgress(ROOT, id => readCheckpoint(id, undefined, local));
+    const checkpointDir = join(dataRoot(ROOT), "checkpoints");
+    const snapshot = await localProgress(ROOT, id => readCheckpoint(id, checkpointDir, local), { checkpointDir });
     if (args.includes('--json')) console.log(JSON.stringify(snapshot,null,2));
     else {
       // Both modes list the same task files but read different checkpoint namespaces,
