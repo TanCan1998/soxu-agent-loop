@@ -76,7 +76,7 @@ function node() {
 }
 function page({ storage = new Map(), handler = () => response(), hidden = false, preferences = new Map(), streamSupport = false, navigatorClipboard, execCommand = () => false, secureContext, confirmResult = true, promptResult = null } = {}) {
   const ids = [
-    "milestoneDialog", "milestoneTitle", "milestoneDetails", "closeMilestone", "token", "tokenLabel", "authPanel", "authNotice", "connect", "notice", "globalRun", "running", "pending", "done",
+    "milestoneDialog", "milestoneTitle", "milestoneDetails", "closeMilestone", "token", "tokenLabel", "authPanel", "authNotice", "connect", "notice", "toast", "copyFallbackDialog", "copyFallbackText", "closeCopyFallback", "globalRun", "running", "pending", "done",
     "total", "badge", "runner", "updated", "stop", "tasks", "logs", "refresh", "copyLogs", "intakeRunState", "productReports", "productCopy", "productDelete", "productClear", "qualityReports", "qualityCopy", "qualityDelete", "qualityClear",
     "navOverview", "navExecution", "navMonitor", "navRequirements", "navLanes", "navModels", "pageOverview", "pageExecution", "pageMonitor", "pageRequirements", "pageLanes", "pageModels", "modelSummary", "openModels", "closeModels", "reloadModels", "saveModels", "modelScope", "modelSearch", "modelInherit", "modelDialog", "modelGroups", "modelMessage", "logLimit", "logFilter", "followLogs", "logCount", "agentCards", "githubStatus", "autoMerge", "updateStatus", "updateTool", "taskFilters", "draftFilters", "milestoneFilters", "projectPhaseTasks",
     "publishButton", "publishMenu", "publishPreview", "publishRelease", "publishHint", "tip", "restartOverlay",
@@ -163,7 +163,7 @@ test("rejecting a token clears only the matching stored session", async () => {
   assert.equal(storage.has(TOKEN_STORAGE_KEY), false);
   assert.equal(reloaded.elements.token.value, "");
   assert.equal(reloaded.elements.authPanel.hidden, false);
-  assert.match(reloaded.elements.notice.textContent, /令牌已失效/);
+  assert.match(reloaded.elements.toast.textContent, /令牌已失效/);
   assert.ok(reloaded.actions.every(button => button.disabled));
 
   const incorrect = page({ storage, handler: () => response(401) });
@@ -348,7 +348,7 @@ test("product and quality open separate report dialogs and run only on explicit 
   const app=page({handler:path=>({ok:true,status:200,json:async()=>path.includes("advisory-reports")?(path.includes("&name=")?{report}:{reports:[{name:"2026-10-27T00-00-00-000Z-123.json",modifiedAt:"2026-10-27T00:00:00Z"}]}):STATUS})});
   app.elements.token.value=TOKEN;app.elements.connect.dispatch("click");await tick();
   app.elements.openProduct.dispatch("click");await tick();
-  assert.equal(app.elements.productDialog.open,true,app.elements.notice.textContent);
+  assert.equal(app.elements.productDialog.open,true,app.elements.toast.textContent);
   assert.equal(app.requests.some(x=>x.path==="/api/advisory-run"),false);
   app.elements.runProduct.dispatch("click");await tick();
   assert.deepEqual(JSON.parse(app.requests.find(x=>x.path==="/api/advisory-run").options.body),{lane:"product"});
@@ -424,7 +424,7 @@ test("copy falls back to execCommand when the page is not a secure context", asy
   await tick();
   app.elements.copyLogs.dispatch("click");
   await tick();
-  assert.match(app.elements.notice.textContent, /已复制到剪贴板/);
+  assert.match(app.elements.toast.textContent, /已复制到剪贴板/);
 });
 
 test("copy reports a manual hint when the browser blocks every clipboard path", async () => {
@@ -440,7 +440,10 @@ test("copy reports a manual hint when the browser blocks every clipboard path", 
   await tick();
   app.elements.copyLogs.dispatch("click");
   await tick();
-  assert.match(app.elements.notice.textContent, /长按选择文本/);
+  // 两条路都失败时不再只给一句提示，而是弹出可手动复制的文本框
+  assert.match(app.elements.toast.textContent, /禁止自动复制/);
+  assert.equal(app.elements.copyFallbackDialog.open, true, "fallback dialog opens");
+  assert.match(app.elements.copyFallbackText.value, /lan-message/, "text is placed for manual copy");
 });
 
 test("completed requirements are grouped in a collapsed section", async () => {
@@ -794,7 +797,7 @@ test("the update button checks when current and applies when an update is availa
   view.elements.updateTool.dispatch("click");
   await tick();
   assert.deepEqual(view.requests.filter(request => request.path === "/api/update").map(request => JSON.parse(request.options.body).action), ["check"]);
-  assert.match(view.elements.notice.textContent, /已是最新/);
+  assert.match(view.elements.toast.textContent, /已是最新/);
 });
 
 test("the token survives a reload when sessionStorage was cleared (Android browsers)", async () => {

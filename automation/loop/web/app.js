@@ -63,7 +63,34 @@ function forgetToken(token) {
     try { if (storage.getItem(TOKEN_STORAGE_KEY) === token) storage.removeItem(TOKEN_STORAGE_KEY); } catch {}
   }
 }
-function notice(message) { $("notice").textContent = message; $("authNotice").textContent = message; }
+/**
+ * 临时提示。
+ *
+ * 过去只写进 #notice —— 那是页面上的一段静态说明文字（宽高为 0，被折叠在面板里），
+ * 于是「已复制到剪贴板」「报告还没加载完成」这类反馈用户根本看不到，
+ * 看起来就像按钮没反应。现在写进真正的 toast。
+ * #authNotice 仍然更新，因为连接失败时需要在连接卡片里看到原因。
+ */
+let toastTimer = null;
+function notice(message) {
+  const toast = $("toast");
+  if (toast) {
+    toast.textContent = message;
+    // 弹窗用 showModal() 会进入 top layer，普通 position:fixed 元素再高的 z-index
+    // 也会被它和它的 backdrop 盖住（backdrop 还有 blur）。popover 同样在 top layer，
+    // 且后显示的排在 dialog 之上。
+    try { toast.showPopover?.(); } catch { /* 已显示或不支持 popover */ }
+    toast.dataset.show = "1";
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toast.dataset.show = "0"; }, 3600);
+  } else {
+    // 测试桩与旧结构没有 #toast，退回写 #notice 保持行为可断言
+    const legacy = $("notice");
+    if (legacy) legacy.textContent = message;
+  }
+  const auth = $("authNotice");
+  if (auth) auth.textContent = message;
+}
 /**
  * 统一确认弹窗：替代浏览器原生 await askConfirm()/await askText()，避免阻塞式弹窗与样式割裂。
  * 返回 Promise，调用方必须 await。
@@ -962,12 +989,14 @@ function legacyCopy(text) {
   if (!document.body) return false;
   const area = document.createElement("textarea");
   area.value = text;
-  area.setAttribute("readonly", "");
-  area.style.position = "fixed";
-  area.style.top = "-1000px";
+  // 不设 readonly：部分 Android WebView 对 readonly 文本域拒绝 select()。
+  // 不移出视口：某些浏览器认为不可见元素不可选中，用 1px + opacity:0 留在原位。
+  // 不用 opacity:0 / visibility:hidden：部分浏览器判定为不可见后拒绝选中，
+  // execCommand("copy") 随之失败。改用 1px 极小尺寸 + 极小透明度留在视口内。
+  area.style.cssText = "position:fixed;left:0;bottom:0;width:1px;height:1px;opacity:0.01;padding:0;border:0;outline:0;background:transparent;color:transparent;";
   document.body.appendChild(area);
   try {
-    area.focus?.();
+    area.focus?.({ preventScroll: true });
     area.select?.();
     area.setSelectionRange?.(0, text.length);
     return Boolean(document.execCommand?.("copy"));
@@ -976,13 +1005,33 @@ function legacyCopy(text) {
 }
 async function copyText(text) {
   if (!text) { notice("没有可复制的内容。"); return; }
+  // 顺序很关键：execCommand("copy") 必须在用户手势的同步执行栈里才有效，
+  // 一旦 await 过（哪怕只是 await 一个失败的 writeText），transient activation
+  // 就失效了，Firefox 会直接拒绝。所以先走同步路径，成功就不再碰异步 API。
+  if (legacyCopy(text)) { notice("已复制到剪贴板。"); return; }
   if (window.isSecureContext !== false && navigator.clipboard?.writeText) {
     try { await navigator.clipboard.writeText(text); notice("已复制到剪贴板。"); return; }
-    catch { /* Fall through to the legacy path. */ }
+    catch { /* 走到下面的手动兜底 */ }
   }
-  if (legacyCopy(text)) { notice("已复制到剪贴板。"); return; }
-  notice("此页面不是安全上下文，浏览器禁止自动复制；请长按选择文本后手动复制。");
+  // 两条路都失败：弹出可手动复制的文本框并自动全选，
+  // 比只给一句「请长按选择文本」有用——用户根本不知道该长按哪里。
+  showCopyFallback(text);
 }
+/**
+ * 复制兜底：环境禁止自动复制时，把文本放进可编辑框并全选。
+ * 用户在弹窗里按 Ctrl+C / 长按「复制」即可拿到内容。
+ */
+function showCopyFallback(text) {
+  const dialog = $("copyFallbackDialog");
+  const area = $("copyFallbackText");
+  if (!dialog || !area) { notice("此环境禁止自动复制，请手动选择文本。"); return; }
+  area.value = text;
+  openDialog(dialog);
+  // 等弹窗动画起来再选中，否则部分浏览器选不中
+  setTimeout(() => { try { area.focus(); area.select(); area.setSelectionRange(0, text.length); } catch { /* ignore */ } }, 120);
+  notice("当前环境禁止自动复制，已选中全文，请按 Ctrl+C 或长按复制。");
+}
+
 /** 把结构化分段转成纯文本（整体复制与单条复制共用，避免字段漂移）。 */
 function partToText(part) {
   if (part.kind === "summary") return part.text ?? "";
@@ -1935,6 +1984,8 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 $("closeMilestone").addEventListener("click",()=>closeDialog($("milestoneDialog")));
+$("closeCopyFallback")?.addEventListener("click",()=>closeDialog($("copyFallbackDialog")));
+dismissOnBackdrop($("copyFallbackDialog"), () => closeDialog($("copyFallbackDialog")));
 // 里程碑 / 产品 / 质量报告只读，没有输入：点外部直接关闭。
 for (const id of ["milestoneDialog", "productDialog", "qualityDialog"])
   dismissOnBackdrop($(id), () => closeDialog($(id)));
