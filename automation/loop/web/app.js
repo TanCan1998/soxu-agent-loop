@@ -460,6 +460,10 @@ function renderFilterBar(hostId, key, onPick, counts) {
     host.append(button);
   }
 }
+// 列表分页上限：压测显示 500 个任务渲染只要 5ms，但 3746 个 DOM 节点会让滚动变卡。
+// 真正的瓶颈是节点数，所以按页渲染，而不是优化渲染函数本身。
+const LIST_PAGE_SIZE = 50;
+const listPageSize = { tasks: LIST_PAGE_SIZE, queue: LIST_PAGE_SIZE };
 function renderTasks(data) {
   const tasks = data.tasks || [];
   const key = JSON.stringify([tasks, data.busy, data.github, listFilters.tasks]);
@@ -473,7 +477,8 @@ function renderTasks(data) {
     done: tasks.filter(taskDone).length,
   });
   const visible = [...tasks].sort((a, b) => a.id - b.id).filter(task => passesFilter(listFilters.tasks, taskDone(task)));
-  for (const task of visible) {
+  const shownTasks = visible.slice(0, listPageSize.tasks);
+  for (const task of shownTasks) {
     const card = element("article", undefined, "task");
     const live=Boolean(data.runner) && (data.taskPhases ?? []).some(p=>p.taskId === (data.github?.tasks?.["TASK-"+String(task.id).padStart(3,"0")]?.issue ?? task.id) && p.status === "running");
     const merged=data.github?.tasks?.["TASK-"+String(task.id).padStart(3,"0")]?.pr?.state === "merged";
@@ -519,6 +524,17 @@ function renderTasks(data) {
     if (task.status === "pending" && remote?.missing?.length) details.push("等待依赖合并：" + remote.missing.join("、"));
     if (details.length) card.append(element("div", details.join(" · "), "task-detail"));
     node.append(card);
+  }
+  if (visible.length > shownTasks.length) {
+    const rest = visible.length - shownTasks.length;
+    const more = element("button", "显示剩余 " + rest + " 项", "ghost");
+    more.type = "button";
+    more.addEventListener("click", () => {
+      listPageSize.tasks += LIST_PAGE_SIZE;
+      lastTaskKey = "";
+      renderTasks(lastSnapshot ?? data);
+    });
+    node.append(more);
   }
   if (!visible.length) node.append(element("div", tasks.length ? "该状态下暂无任务" : "暂无任务", "empty"));
 }
@@ -891,15 +907,36 @@ async function copyText(text) {
   if (legacyCopy(text)) { notice("已复制到剪贴板。"); return; }
   notice("此页面不是安全上下文，浏览器禁止自动复制；请长按选择文本后手动复制。");
 }
+/** 把结构化分段转成纯文本（整体复制与单条复制共用，避免字段漂移）。 */
+function partToText(part) {
+  if (part.kind === "summary") return part.text ?? "";
+  if (part.kind === "unknowns") return (part.items ?? []).join("\n");
+  return [
+    part.impact ? "影响：" + part.impact : "",
+    part.action ? "建议：" + part.action : "",
+    part.evidence?.length ? "证据：\n" + part.evidence.join("\n") : "",
+  ].filter(Boolean).join("\n");
+}
 function copyButton(text, label) {
   const button=element("button","⧉","icon-button"); button.type="button";
   button.setAttribute("aria-label",label);setTip(button,label);
   button.addEventListener("click",()=>void copyText(text));return button;
 }
+/**
+ * 报告分段：结构化的 finding（含 impact/action/evidence），而不是拼成一大段文本。
+ * 渲染侧据此做折叠 + 懒加载——一份 15KB 的报告全量渲染会产生数百个节点，
+ * 打开对话框时明显卡顿。
+ */
 function reportParts(report) {
-  const parts=[{title:"摘要",text:report.summary}];
-  for(const f of report.findings) parts.push({title:f.title,text:f.recommendation+"\n置信度："+f.confidence+"\n证据："+(f.evidence.join("；") || "未提供")});
-  if(report.unknowns.length) parts.push({title:"待核实",text:report.unknowns.join("\n")});
+  const parts=[{kind:"summary",title:"摘要",text:report.summary}];
+  for(const f of report.findings) parts.push({
+    kind:"finding", title:f.title, confidence:f.confidence,
+    impact:f.impact ?? "", action:f.action ?? f.recommendation ?? "",
+    evidence:Array.isArray(f.evidence) ? f.evidence : [],
+    // 兼容旧报告：没有 impact/action 时退回拼接文本
+    legacy:!f.action && !f.recommendation ? "" : null,
+  });
+  if(report.unknowns?.length) parts.push({kind:"unknowns",title:"待核实",items:report.unknowns});
   return parts;
 }
 async function loadAdvisory(lane, selected=null) {
@@ -918,7 +955,48 @@ async function loadAdvisory(lane, selected=null) {
     const {report}=await api("/api/advisory-reports?lane="+lane+"&name="+encodeURIComponent(name));
     currentReports[lane]=report;
     node.replaceChildren();node.append(element("p","未经核实的模型建议"+(report.createdAt ? " · "+new Date(report.createdAt).toLocaleString() : ""),"notice"));
-    for(const part of reportParts(report)) {const block=element("div",undefined,"assessment-block");const head=element("div",undefined,"report-heading");head.append(element("strong",part.title),copyButton(part.title+"\n"+part.text,"复制"+part.title));block.append(head,element("p",part.text));node.append(block);}
+    for(const part of reportParts(report)) {
+      if(part.kind==="finding") {
+        // 折叠 + 懒加载：内容只在首次展开时构建，初始只渲染标题行。
+        const details=element("details",undefined,"assessment-block");
+        const summary=element("summary",undefined,"report-heading");
+        summary.append(element("strong",part.title));
+        if(part.confidence) { const badge=element("span",part.confidence,"confidence-badge"); badge.dataset.level=part.confidence; summary.append(badge); }
+        // 复制单条：放折叠头里，点它不触发折叠（stopPropagation）。
+        const copy=copyButton(part.title+"\n"+partToText(part),"复制"+part.title);
+        copy.addEventListener("click",event=>event.stopPropagation());
+        summary.append(copy);
+        details.append(summary);
+        details.addEventListener("toggle",()=>{
+          if(!details.open) {
+            // 关闭即回收：只靠懒加载解决首屏，一路展开仍会让 DOM 持续增长。
+            const body=details.querySelector(".assessment-body");
+            if(body) body.remove();
+            details.dataset.filled="0";
+            return;
+          }
+          if(details.dataset.filled==="1") return;
+          details.dataset.filled="1";
+          const body=element("div",undefined,"assessment-body");
+          if(part.impact) body.append(element("p","影响："+part.impact));
+          if(part.action) body.append(element("p","建议："+part.action));
+          if(part.evidence.length) {
+            const ul=element("ul",undefined,"evidence-list");
+            for(const item of part.evidence) ul.append(element("li",item));
+            body.append(ul);
+          }
+          details.append(body);
+        });
+        node.append(details);
+        continue;
+      }
+      const block=element("div",undefined,"assessment-block");
+      const head=element("div",undefined,"report-heading");
+      const text=partToText(part);
+      head.append(element("strong",part.title),copyButton(part.title+"\n"+text,"复制"+part.title));
+      block.append(head,element("p",text));
+      node.append(block);
+    }
   } catch(error) {currentReports[lane]=null;node.replaceChildren(element("p","报告读取失败："+error.message,"error-text"));}
 }
 async function deleteAdvisory(lane, all) {
@@ -1068,7 +1146,8 @@ function renderQueue() {
   if (data.github?.status !== "ok") { queue.append(element("div","GitHub 需求列表暂不可用，请检查连接后重试。","empty")); return; }
   if (!queueItems.length) { queue.append(element("div","没有已创建的需求。","empty")); return; }
   if (!queueVisible.length) { queue.append(element("div","当前分类下没有已创建的需求。","empty")); return; }
-  for (const item of queueVisible) {
+  const shownQueue = queueVisible.slice(0, listPageSize.queue);
+  for (const item of shownQueue) {
     const row=element("div",undefined,"queue-item");
     row.setAttribute("data-issue-number", String(item.number));
     if (item.state === "OPEN") {
@@ -1128,6 +1207,17 @@ function renderQueue() {
       row.append(tag);
     }
     queue.append(row);
+  }
+  if (queueVisible.length > shownQueue.length) {
+    const rest = queueVisible.length - shownQueue.length;
+    const more = element("button", "显示剩余 " + rest + " 项", "ghost");
+    more.type = "button";
+    more.addEventListener("click", () => {
+      listPageSize.queue += LIST_PAGE_SIZE;
+      lastQueueKey = "";
+      renderQueue();
+    });
+    queue.append(more);
   }
 }
 function renderDrafts(data, legacy = null) {
@@ -1404,7 +1494,7 @@ for (const lane of ["product","quality"]) {
   $("close"+cap).addEventListener("click",()=>closeDialog($(lane+"Dialog")));
   $("run"+cap).addEventListener("click",()=>void startAdvisory(lane));
   $(lane+"Reports").addEventListener("change",()=>void loadAdvisory(lane,$(lane+"Reports").value));
-  $(lane+"Copy").addEventListener("click",()=>{const report=currentReports[lane];if(report) void copyText(reportParts(report).map(p=>p.title+"\n"+p.text).join("\n\n"));});
+  $(lane+"Copy").addEventListener("click",()=>{const report=currentReports[lane];if(report) void copyText(reportParts(report).map(p=>p.title+"\n"+partToText(p)).join("\n\n"));});
   $(lane+"Delete").addEventListener("click",()=>void deleteAdvisory(lane,false));
   $(lane+"Clear").addEventListener("click",()=>void deleteAdvisory(lane,true));
 }
