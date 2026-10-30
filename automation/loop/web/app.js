@@ -675,7 +675,10 @@ function renderProjectPhase(github, data) {
   lastRoadmapKey=key;
   const phases=new Set(data.runner ? (data.taskPhases ?? []).filter(p=>p.status === "running").map(p=>p.taskId) : []);
   const node=$("roadmapCards");node.replaceChildren();
-  let running=0, paused=0, total=0, merged=0;
+  let running=0, paused=0, unknownCount=0, total=0, merged=0;
+  // 待核实要单独统计：它和 running/paused 不是互斥关系。
+  // M1 可能整体是 paused，但内部仍有 3 项完成证据待核实，只按状态计数会漏掉。
+  let unverifiedMilestones=0, unverifiedTasks=0;
   for (const id of Object.keys(names)) {
     const stage=roadmap?.stages?.find(x=>x.id===id);
     const unknown=!roadmap || roadmap.limited || !stage || !stage.total;
@@ -694,7 +697,8 @@ function renderProjectPhase(github, data) {
     : stage.merged===stage.total && !stage.unknown ? "completed"
     : stage.unknown > 0 ? "unverified"
     : "waiting";
-    if(active)running++;else if(state==="paused")paused++;
+    if(active)running++;else if(state==="paused")paused++;else if(state==="unknown")unknownCount++;
+  if(!unknown && stage.unknown > 0){unverifiedMilestones++;unverifiedTasks+=stage.unknown;}
     if(!unknown){total+=stage.total;merged+=stage.merged;}
     const card=element("article",undefined,"milestone-card");card.dataset.status=state;
     card.setAttribute("role","button");card.setAttribute("tabindex","0");card.setAttribute("aria-label",id+" · "+names[id]+"，查看任务明细");
@@ -711,7 +715,16 @@ function renderProjectPhase(github, data) {
     node.append(card);
   }
   const local = roadmap?.source === "local";
-  $("projectPhaseTitle").textContent=!roadmap ? "项目里程碑状态待核实" : running ? `${running} 个里程碑正在推进` : paused ? `${paused} 个里程碑有暂停或阻塞任务` : "已归类里程碑当前无活跃任务";
+  // 过去这里是互斥三元：有 running 就只报 running，没 running 才报 paused，
+  // 待核实（unverified）与数据缺失（unknown）从不出现。现在并列陈述各自的数量。
+  const parts=[];
+  if(running)parts.push(`${running} 个正在推进`);
+  if(paused)parts.push(`${paused} 个暂停或阻塞`);
+  if(unverifiedMilestones)parts.push(`${unverifiedMilestones} 个里程碑共 ${unverifiedTasks} 项待核实`);
+  if(unknownCount)parts.push(`${unknownCount} 个归类待确认`);
+  $("projectPhaseTitle").textContent=!roadmap ? "项目里程碑状态待核实"
+    : parts.length ? parts.join(" · ")
+    : "已归类里程碑当前无活跃任务";
   $("projectPhaseCount").textContent=roadmap && !roadmap.limited ? `${merged} / ${total} 项已合入${local ? "（本地推定）" : ""}` : "—";
   renderPhaseTasks(data);
   $("projectPhaseDetail").textContent=!roadmap ? "GitHub 与本地检查点都没有可用的里程碑数据。" : roadmap.limited ? "GitHub 查询达到上限，进度待核实。" : local ? "GitHub 暂不可用，以上按本地检查点与任务文件推定；合入与验收仍需在 GitHub 复核。" : "按任务元数据或 GitHub 里程碑自动归类；运行状态基于控制台活动，数据可能有延迟。";
