@@ -145,8 +145,13 @@ async function once() {
   return Promise.all(available.slice(0, p.maxConcurrentAgents).map(issue => processIssue(issue, { policy: p, local, signal: controller.signal })));
 }
 /** One finite recovery batch: paused and blocked tasks are handled uniformly. */
-async function recover(selected = null) {
-  const includeBlocked = true;
+/**
+ * 恢复暂停/阻塞任务。
+ *
+ * includeBlocked 默认 true（`start` 命令 = 人工显式恢复）；
+ * `loop` 启动时的自动恢复传 false，只恢复被中断的 paused，不替用户解锁 blocked。
+ */
+async function recover(selected = null, { includeBlocked = true } = {}) {
   const candidates = selected ?? (await listPaused(undefined, { includeBlocked })).filter(s => local ? s.local : !s.local);
   if (!candidates.length) { console.log("No recoverable task; nothing to replay or bill."); return; }
   const select = selected ? null : args.find(x => /^#?\d+$/.test(x));
@@ -296,7 +301,8 @@ switch (command) {
       const interrupted = (await listPaused(undefined, { includeBlocked: false })).filter(s => local ? s.local : !s.local);
       if (interrupted.length) {
         console.log("Resuming " + interrupted.length + " interrupted task(s) before the loop");
-        await recover();
+        // 只恢复 paused：blocked 需要人工确认原因后再用 start 解锁（P0-3）。
+        await recover(null, { includeBlocked: false });
         if (controller.signal.aborted) break;
       }
     }

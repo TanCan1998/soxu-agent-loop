@@ -60,14 +60,17 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
       const originMatch=/^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(origin);
       const pushMatch=/^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(pushOrigin);
       if(!originMatch || !pushMatch || originMatch[1].toLowerCase()!==repo.toLowerCase() || pushMatch[1].toLowerCase()!==repo.toLowerCase()) throw Error("origin-mismatch");
-      const pr=JSON.parse((await exec("gh",["pr","view",state.pr,"--json","state,mergedAt,baseRefName,headRefName,headRefOid,isCrossRepository"])).stdout);
+      const pr=JSON.parse((await exec("gh",["pr","view",state.pr,"--json","state,mergedAt,baseRefName,headRefName,headRefOid,isCrossRepository,mergeCommit"])).stdout);
       // head 与 checkpoint 不一致说明分支在任务后被推过（例如同步集成分支）；
       // 保守起见保留现场不清理，但必须把原因报出来——之前这里是静默跳过，
       // 统计只算 cleaned/preserved/errors，界面上看起来像"什么都没发生"。
       if(pr.state!=="MERGED" || !pr.mergedAt || pr.baseRefName!==base || pr.headRefName!==branch || pr.isCrossRepository!==false) {
         results.push({issue:n,status:"not-verified",reason:"pr-state"});continue;
       }
-      if(pr.headRefOid!==sha) {
+      // P0-2：人工 rebase 会改写 head，旧 sha 不再是新 head 的祖先，原先永久跳过。
+      // merge 阶段已回写 mergedHead（合并后的 commit），与 PR 的 mergeCommit 一致即可放行。
+      const mergedHeadRecorded = Boolean(state.mergedHead && pr.mergeCommit?.oid && state.mergedHead === pr.mergeCommit.oid);
+      if(pr.headRefOid!==sha && !mergedHeadRecorded) {
         // 流程优化（2026-10-29）：人工解决集成分支冲突后 head 会偏离 checkpoint。
         // squash-merge 仓库里 checkpoint commit 不在 PR 项链上，is-ancestor 不可用；
         // 放行条件改为硬证据——PR head 的树包含 checkpoint 记录的 testedTree 所在
