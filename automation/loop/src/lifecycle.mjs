@@ -8,7 +8,28 @@
  * 「打 agent:pr」写在 worker.mjs 里，各自维护一份标签清单，于是 GitHub 自动关闭 Issue 的路径
  * 完全没清标签。状态机集中后，这类遗漏只可能出现在一个文件里。
  */
-import { STALE_AFTER_MERGE_LABELS } from "./rules.mjs";
+import { STALE_AFTER_MERGE_LABELS, STATE_LABELS } from "./rules.mjs";
+
+/**
+ * 状态标签互斥：先读真实标签再算差集，不能只 `--add-label`。
+ *
+ * 曾经的隐患：一个 agent:waiting 的需求被人工点「就绪」后同时持有两个状态标签，
+ * Runner 与面板对它的判断就会打架。Worker 的 setTaskState 与看板的
+ * setIssueReady 曾各写一份互斥逻辑，现在共用这一处。
+ */
+export async function applyStateLabel(exec, root, issueNumber, state) {
+  if (!STATE_LABELS.includes(state)) throw new Error("unsupported task state: " + state);
+  const view = JSON.parse(
+    (await exec("gh", ["issue", "view", String(issueNumber), "--json", "labels"], { cwd: root, timeoutMs: 30000 })).stdout,
+  );
+  const held = new Set((view.labels ?? []).map((label) => label?.name ?? label));
+  const removed = STATE_LABELS.filter((name) => name !== state && held.has(name));
+  const args = ["issue", "edit", String(issueNumber)];
+  if (!held.has(state)) args.push("--add-label", state);
+  for (const name of removed) args.push("--remove-label", name);
+  if (args.length > 3) await exec("gh", args, { cwd: root, timeoutMs: 30000 });
+  return { added: held.has(state) ? null : state, removed };
+}
 
 /** 返回该清掉的陈旧标签（只返回实际存在的，避免无意义的 gh 调用）。 */
 export function staleLabels(issueLabels) {

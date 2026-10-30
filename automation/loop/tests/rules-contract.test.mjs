@@ -87,6 +87,15 @@ test("标签常量只有 rules.mjs 一处定义，其它源码不得再写 agent
   assert.deepEqual(offenders, [], "以下文件仍在硬编码标签字面量，请改用 rules.mjs 的 TASK_STATE/LABELS：" + offenders.join(", "));
 });
 
+test("状态互斥只有一处实现：Runner 与看板都走 lifecycle.applyStateLabel", async () => {
+  const dir = join(import.meta.dirname, "..", "src");
+  for (const file of ["github.mjs", "queue-order.mjs"]) {
+    const source = await readFile(join(dir, file), "utf8");
+    assert.match(source, /applyStateLabel/, file + " 必须复用 lifecycle.applyStateLabel");
+    assert.doesNotMatch(source, /for \(const name of STATE_LABELS\)/, file + " 不得再自行计算状态差集");
+  }
+});
+
 test("完成态只清未完成标签，agent:release 等非状态标签保持不动", () => {
   assert.deepEqual(
     staleLabels([{ name: "agent:pr" }, { name: "agent:ready" }, { name: "agent:release" }, { name: "enhancement" }]).sort(),
