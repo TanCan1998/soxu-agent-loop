@@ -220,7 +220,10 @@ dialog.closing::backdrop{animation:backdrop-out .18s ease-in forwards}
   --paper:#f2f1ee;--paper-raised:#faf9f7;--paper-sunken:#e9e8e4;
   --hero-ink:#101014;--hero-muted:#1010149e;--hero-line:#10101429;
   --hero-accent:#2d81ff;--hero-scan:#10101408;
-  --font-serif:"Instrument Serif","Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Songti SC",serif;
+  /* 中文没有可用的衬线体：Songti SC 是 macOS 字体，Windows 上会落到 serif（宋体），
+   68px 的宋体在深色背景上笔画发虚、和正文的无衬线体反差过大。
+   英文保留 Instrument Serif 的设计感，中文交给系统黑体。 */
+--font-serif:"Instrument Serif","Iowan Old Style","Palatino Linotype",Palatino,Georgia,"PingFang SC","Microsoft YaHei UI","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;
   --font-mono:"Geist Mono",ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
 }
 [data-theme="dark"]{
