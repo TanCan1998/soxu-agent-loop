@@ -35,19 +35,35 @@ async function fileMtime(dir, filename) {
  * 「[M1] [TASK-028] 文件抽屉…」）。早期 issue 标题没有 TASK 前缀的，
  * 映射不到就退回原来的行为，不会比现在更差。
  */
-async function taskIdToIssueMap(checkpointDir) {
+async function taskIdToIssueMap(root, checkpointDir) {
   const map = new Map();
-  if (!checkpointDir) return map;
-  let files;
-  try { files = await readdir(checkpointDir); } catch { return map; }
-  for (const name of files) {
-    const m = name.match(/^github-issue-(\d+)\.json$/);
-    if (!m) continue;
-    try {
-      const data = JSON.parse(await readFile(join(checkpointDir, name), 'utf8'));
-      const taskId = taskIdFromIssueTitle(data?.issue?.title ?? '');
-      if (taskId) map.set(taskId, Number(m[1]));
-    } catch { /* 跳过损坏的 checkpoint */ }
+  // 1. 首选任务文件里的 githubIssue 字段（intake 创建 issue 后回写，最可靠）
+  for (const dir of ['backlog', 'done']) {
+    const base = join(root, 'tasks', dir);
+    let files;
+    try { files = await readdir(base); } catch { continue; }
+    for (const name of files) {
+      if (!/^TASK-\d+\.md$/.test(name)) continue;
+      try {
+        const text = await readFile(join(base, name), 'utf8');
+        const m = text.match(/^githubIssue:\s*(\d+)$/m);
+        if (m) map.set(name.slice(0, -3), Number(m[1]));
+      } catch { /* 跳过不可读文件 */ }
+    }
+  }
+  // 2. 补充：早期任务没有 githubIssue 字段，用 checkpoint 里的 issue.title 反查
+  if (checkpointDir) {
+    let files;
+    try { files = await readdir(checkpointDir); } catch { files = []; }
+    for (const name of files) {
+      const m = name.match(/^github-issue-(\d+)\.json$/);
+      if (!m) continue;
+      try {
+        const data = JSON.parse(await readFile(join(checkpointDir, name), 'utf8'));
+        const taskId = taskIdFromIssueTitle(data?.issue?.title ?? '');
+        if (taskId && !map.has(taskId)) map.set(taskId, Number(m[1]));
+      } catch { /* 跳过损坏的 checkpoint */ }
+    }
   }
   return map;
 }
@@ -61,7 +77,7 @@ async function taskTitle(dir, filename) {
 
 /** Offline project snapshot: local task files and checkpoints, NOT GitHub's live progress. */
 export async function localProgress(root = ROOT, getCheckpoint = (id) => readCheckpoint(id), { checkpointDir = null } = {}) {
-  const issueByTask = await taskIdToIssueMap(checkpointDir);
+  const issueByTask = await taskIdToIssueMap(root, checkpointDir);
   const backlogDir = join(root, 'tasks/backlog');
   const doneDir = join(root, 'tasks/done');
   const open = await safeTasks(backlogDir);
