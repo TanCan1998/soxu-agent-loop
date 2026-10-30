@@ -8,6 +8,7 @@ import { validIssue } from "./guards.mjs";
 import { loadTaskCatalog, taskIdFromIssueTitle, withGithubIssue } from "./task-catalog.mjs";
 import { planGithubQueue, mergedIssueNumbers, waitingLabelDowngrades } from "./github-queue.mjs";
 import { readQueueOrder } from "./queue-order.mjs";
+import { applyStateLabel } from "./lifecycle.mjs";
 import {
   closingBody,
   issueTitle as formatIssueTitle,
@@ -65,17 +66,12 @@ export async function labelIssue(n, add, remove, note = null) {
  * 这里改为先读真实标签再计算差集，保证同一时刻只有一个状态。
  */
 export async function setTaskState(n, state, note = null) {
-  if (!STATE_LABELS.includes(state)) throw new Error("unsupported task state: " + state);
-  const view = JSON.parse(await gh(["issue", "view", String(n), "--json", "labels"], ROOT));
-  const current = new Set((view.labels ?? []).map(x => x.name));
-  const args = ["issue", "edit", String(n)];
-  if (!current.has(state)) args.push("--add-label", state);
-  for (const name of STATE_LABELS) {
-    if (name !== state && current.has(name)) args.push("--remove-label", name);
-  }
-  if (args.length > 3) await gh(args, ROOT);
+  // 互斥逻辑在 lifecycle.mjs：看板的「点就绪」与 Runner 的状态迁移共用同一实现，
+  // 否则两条路径会各自维护一份差集计算（历史 bug：同一 Issue 同时挂两个状态标签）。
+  const exec = async (bin, args, opts) => ({ stdout: await gh(args, ROOT, opts) });
+  const result = await applyStateLabel(exec, ROOT, n, state);
   if (note) await commentIssue(n, note);
-  return { added: current.has(state) ? null : state, removed: STATE_LABELS.filter(x => x !== state && current.has(x)) };
+  return result;
 }
 export async function commentIssue(n, message) {
   const dir = await mkdtemp(join(tmpdir(), "soxu-"));
