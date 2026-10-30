@@ -991,9 +991,12 @@ function legacyCopy(text) {
   area.value = text;
   // 不设 readonly：部分 Android WebView 对 readonly 文本域拒绝 select()。
   // 不移出视口：某些浏览器认为不可见元素不可选中，用 1px + opacity:0 留在原位。
-  // 不用 opacity:0 / visibility:hidden：部分浏览器判定为不可见后拒绝选中，
-  // execCommand("copy") 随之失败。改用 1px 极小尺寸 + 极小透明度留在视口内。
-  area.style.cssText = "position:fixed;left:0;bottom:0;width:1px;height:1px;opacity:0.01;padding:0;border:0;outline:0;background:transparent;color:transparent;";
+  // 尺寸不能太小：1px 宽的 textarea 装 8000+ 字符要排成 8000 行，
+  // 渲染极慢且 Firefox 对极小元素的 execCommand 不可靠（返回 true 却没写进剪贴板）。
+  // 用 200×80 + opacity 0.01 留在视口内，既满足「可见」要求又不拖慢排版。
+  // 也不能用 opacity:0 / visibility:hidden / display:none：会被判定不可选中。
+  area.setAttribute("aria-hidden", "true");
+  area.style.cssText = "position:fixed;left:0;bottom:0;width:200px;height:80px;opacity:0.01;padding:0;border:0;outline:0;background:transparent;color:transparent;overflow:hidden;white-space:pre;z-index:-1;";
   document.body.appendChild(area);
   try {
     area.focus?.({ preventScroll: true });
@@ -1003,18 +1006,33 @@ function legacyCopy(text) {
   } catch { return false; }
   finally { document.body.removeChild(area); }
 }
-async function copyText(text) {
+/**
+ * 复制文本。
+ *
+ * 顺序是踩出来的：
+ *  - Firefox 的 document.execCommand("copy") 会返回 true 却不真的写剪贴板
+ *    （元素再大、focus 再对也一样），所以不能把它当首选；
+ *  - navigator.clipboard.writeText 可靠，但必须在用户手势的有效期内发起，
+ *    一旦先 await 别的东西（哪怕只是 await 一个失败的 writeText），
+ *    transient activation 就过期，Firefox 直接拒绝。
+ *
+ * 所以：先直接发起 writeText（不 await 前置操作），失败再退回 execCommand。
+ */
+function copyText(text) {
   if (!text) { notice("没有可复制的内容。"); return; }
-  // 顺序很关键：execCommand("copy") 必须在用户手势的同步执行栈里才有效，
-  // 一旦 await 过（哪怕只是 await 一个失败的 writeText），transient activation
-  // 就失效了，Firefox 会直接拒绝。所以先走同步路径，成功就不再碰异步 API。
-  if (legacyCopy(text)) { notice("已复制到剪贴板。"); return; }
-  if (window.isSecureContext !== false && navigator.clipboard?.writeText) {
-    try { await navigator.clipboard.writeText(text); notice("已复制到剪贴板。"); return; }
-    catch { /* 走到下面的手动兜底 */ }
+  const clipboard = navigator.clipboard;
+  if (window.isSecureContext !== false && clipboard?.writeText) {
+    // 立即调用，不 await 任何前置异步操作，保住手势
+    clipboard.writeText(text).then(
+      () => notice("已复制到剪贴板。"),
+      () => {
+        if (legacyCopy(text)) { notice("已复制到剪贴板。"); return; }
+        showCopyFallback(text);
+      }
+    );
+    return;
   }
-  // 两条路都失败：弹出可手动复制的文本框并自动全选，
-  // 比只给一句「请长按选择文本」有用——用户根本不知道该长按哪里。
+  if (legacyCopy(text)) { notice("已复制到剪贴板。"); return; }
   showCopyFallback(text);
 }
 /**
