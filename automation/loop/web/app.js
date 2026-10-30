@@ -19,6 +19,8 @@ const phaseLabels = {
   createPr:"创建 PR", merge:"等待合并", done:"完成", archived:"已归档"
 };
 const activityLabels = { waiting:"等待模型", generating:"生成中", tool:"执行工具", completed:"已完成", failed:"失败" };
+// 报告的置信度等级：原始值是 high/medium/low，界面显示中文
+const CONFIDENCE_LABEL = { high:"高", medium:"中", low:"低" };
 let connected = false, requestInFlight = false;
 let instanceId = null, latestSequence = 0, logs = [], lastTaskKey = "", renderedLogKey = "";
 let agents = new Map(), lastAgentKey = "", streamController = null, streamToken = null, reconnectTimer = null, retries = 0;
@@ -105,6 +107,9 @@ function showConfirmDialog({ message, input = null, confirmText = "确认", dang
  */
 function closeDialog(dialog) {
   if (!dialog) return;
+  // 先收指示条再播退场动画：关闭动画期间容器仍可见，
+  // 如果等到 close 事件再重算，会看到发光条闪一下再消失。
+  hideIndicatorsIn(dialog);
   // 上一次退场没有收尾（动画事件丢失等）：立刻强制关闭，绝不让弹窗卡在
   // open + closing 状态——否则它既关不掉、又因为已 open 而无法再次打开。
   if (dialog.dataset.closing === "1") {
@@ -250,7 +255,13 @@ function mountScrollIndicator(scroller = null) {
     window.addEventListener("touchmove", sync, { passive: true });
   }
   window.addEventListener("resize", sync);
-  scrollIndicators.push(sync);
+  // 存容器与隐藏方法：弹窗关闭时要在动画开始前就把弹窗内的指示条收掉，
+  // 否则会看到它「凭空出现又消失」——关闭动画期间容器还可见，重算会把它点亮。
+  scrollIndicators.push({
+    scroller,
+    sync,
+    hide: () => { bar.classList.remove("visible", "active"); },
+  });
   sync();
   return sync;
 }
@@ -273,7 +284,13 @@ function mountScrollIndicators() {
   } catch { /* 受限环境（无布局/测试桩）跳过，不影响页面逻辑 */ }
 }
 /** 弹窗开合会改变容器位置，重算一次指示条。 */
-function refreshScrollIndicators() { for (const sync of scrollIndicators) sync(); }
+function refreshScrollIndicators() { for (const item of scrollIndicators) item.sync(); }
+/** 容器即将隐藏（弹窗关闭）：立刻收掉它内部的指示条，不等重算。 */
+function hideIndicatorsIn(container) {
+  for (const item of scrollIndicators) {
+    if (item.scroller && container?.contains?.(item.scroller)) item.hide();
+  }
+}
 // 关闭弹窗后必须重算：弹窗内的滚动会让指示条带上 visible，
 // 而 closeDialog 有多条退出路径（正常退场 / 强制关闭 / 已关闭直接返回），
 // 逐个补调用容易漏。close 事件不冒泡，用捕获阶段统一接住。
@@ -976,10 +993,17 @@ function partToText(part) {
     part.evidence?.length ? "证据：\n" + part.evidence.join("\n") : "",
   ].filter(Boolean).join("\n");
 }
+/**
+ * 复制图标：用内联 SVG，不用字符 ⧉ —— 那个字符在不同字体下形状差异很大，
+ * 而且与页面其它图标（六点手柄等）风格不统一。
+ */
+const COPY_ICON = '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5V2.5a1 1 0 0 0-1-1h-7a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h1"/></svg>';
 function copyButton(text, label) {
-  const button=element("button","⧉","icon-button"); button.type="button";
+  const button=element("button",undefined,"icon-button"); button.type="button";
+  button.innerHTML=COPY_ICON;
   button.setAttribute("aria-label",label);setTip(button,label);
-  button.addEventListener("click",()=>void copyText(text));return button;
+  button.addEventListener("click",event=>{event.stopPropagation();void copyText(text);});
+  return button;
 }
 /**
  * 报告分段：结构化的 finding（含 impact/action/evidence），而不是拼成一大段文本。
@@ -1019,8 +1043,20 @@ async function loadAdvisory(lane, selected=null) {
         // 折叠 + 懒加载：内容只在首次展开时构建，初始只渲染标题行。
         const details=element("details",undefined,"assessment-block");
         const summary=element("summary",undefined,"report-heading");
-        summary.append(element("strong",part.title));
-        if(part.confidence) { const badge=element("span",part.confidence,"confidence-badge"); badge.dataset.level=part.confidence; summary.append(badge); }
+        // 标题与标签包在一个可收缩的容器里：
+        // 标题过长时自己省略，不能把置信度标签挤出去（标题栏是 space-between，
+        // 三个平级子元素会被推开，标签跑到中间）。
+        const titleWrap=element("span",undefined,"report-title");
+        const strong=element("strong",part.title);
+        strong.title=part.title;   // 溢出时悬浮显示完整标题
+        titleWrap.append(strong);
+        if(part.confidence) {
+          const level=String(part.confidence).toLowerCase();
+          const badge=element("span",CONFIDENCE_LABEL[level] ?? part.confidence,"confidence-badge");
+          badge.dataset.level=level;
+          titleWrap.append(badge);
+        }
+        summary.append(titleWrap);
         // 复制单条：放折叠头里，点它不触发折叠（stopPropagation）。
         const copy=copyButton(part.title+"\n"+partToText(part),"复制"+part.title);
         copy.addEventListener("click",event=>event.stopPropagation());
@@ -1572,7 +1608,7 @@ for (const lane of ["product","quality"]) {
   $("close"+cap).addEventListener("click",()=>closeDialog($(lane+"Dialog")));
   $("run"+cap).addEventListener("click",()=>void startAdvisory(lane));
   $(lane+"Reports").addEventListener("change",()=>void loadAdvisory(lane,$(lane+"Reports").value));
-  $(lane+"Copy").addEventListener("click",()=>{const report=currentReports[lane];if(report) void copyText(reportParts(report).map(p=>p.title+"\n"+partToText(p)).join("\n\n"));});
+  $(lane+"Copy").addEventListener("click",()=>{const report=currentReports[lane];if(!report){notice("报告还没加载完成，请稍候再试。");return;}void copyText(reportParts(report).map(p=>p.title+"\n"+partToText(p)).join("\n\n"));});
   $(lane+"Delete").addEventListener("click",()=>void deleteAdvisory(lane,false));
   $(lane+"Clear").addEventListener("click",()=>void deleteAdvisory(lane,true));
 }
@@ -1816,6 +1852,78 @@ $("stop").addEventListener("click", async () => {
 });
 $("refresh").addEventListener("click", () => void refresh());
 mountScrollIndicators();
+
+/* ---------- 自定义下拉 ----------
+   原生 select 在深色主题下样式无法控制：选项列表由系统绘制，不跟随页面配色，
+   Android WebView 里还会盖住整个屏幕。这里用一层自定义 UI 包住原生 select，
+   保留原 select 作为真值来源，所有既有代码不用改。 */
+function enhanceSelect(select) {
+  if (select.dataset.enhanced === "1") return;
+  select.dataset.enhanced = "1";
+  select.classList.add("native-select");
+  const wrap = element("div", undefined, "mini-select");
+  const button = element("button", undefined, "mini-select-button");
+  button.type = "button";
+  button.setAttribute("aria-haspopup", "listbox");
+  button.setAttribute("aria-expanded", "false");
+  const label = element("span", undefined, "mini-select-label");
+  const caret = element("span", undefined, "mini-select-caret");
+  caret.setAttribute("aria-hidden", "true");
+  button.append(label, caret);
+  const list = element("ul", undefined, "mini-select-list");
+  list.setAttribute("role", "listbox");
+  wrap.append(button, list);
+  select.after(wrap);
+
+  const syncLabel = () => {
+    label.textContent = select.selectedOptions?.[0]?.textContent ?? "";
+    button.disabled = select.disabled;
+  };
+  const rebuild = () => {
+    list.replaceChildren();
+    for (const opt of select.options) {
+      const li = element("li", opt.textContent, "mini-select-option");
+      li.setAttribute("role", "option");
+      li.dataset.value = opt.value;
+      if (opt.value === select.value) li.setAttribute("aria-selected", "true");
+      li.addEventListener("click", () => {
+        if (select.value !== opt.value) {
+          select.value = opt.value;
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+        close();
+        syncLabel();
+      });
+      list.append(li);
+    }
+    syncLabel();
+  };
+  const close = () => { wrap.dataset.open = "0"; button.setAttribute("aria-expanded", "false"); };
+  const open = () => {
+    // 同一时刻只开一个
+    for (const other of document.querySelectorAll('.mini-select[data-open="1"]')) {
+      if (other !== wrap) { other.dataset.open = "0"; other.querySelector(".mini-select-button")?.setAttribute("aria-expanded", "false"); }
+    }
+    wrap.dataset.open = "1";
+    button.setAttribute("aria-expanded", "true");
+    list.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+  };
+  button.addEventListener("click", event => {
+    event.stopPropagation();
+    if (wrap.dataset.open === "1") close(); else open();
+  });
+  document.addEventListener("click", event => { if (!wrap.contains(event.target)) close(); });
+  // loadAdvisory 会重建 option，用 MutationObserver 跟上
+  if (typeof MutationObserver === "function") new MutationObserver(rebuild).observe(select, { childList: true, subtree: true });
+  select.addEventListener("change", syncLabel);
+  rebuild();
+}
+// 用固定 ID 列表而不是 querySelectorAll("select")：测试环境的 DOM stub 只实现了
+// 页面逻辑用到的少数 selector，通配查询会返回不可用的桩对象。
+for (const id of ["logLimit", "logFilter", "intakeMilestone", "modelScope", "productReports", "qualityReports"]) {
+  const sel = $(id);
+  if (sel) { try { enhanceSelect(sel); } catch { /* 纯视觉增强，失败不影响功能 */ } }
+}
 setInterval(() => void refresh(), 15000);
 setInterval(() => { if (!document.hidden) {updateElapsed();updateRunTimers();} }, 1000);
 window.addEventListener("pagehide", stopStream);
