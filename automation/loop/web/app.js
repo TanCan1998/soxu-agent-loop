@@ -907,6 +907,16 @@ async function copyText(text) {
   if (legacyCopy(text)) { notice("已复制到剪贴板。"); return; }
   notice("此页面不是安全上下文，浏览器禁止自动复制；请长按选择文本后手动复制。");
 }
+/** 把结构化分段转成纯文本（整体复制与单条复制共用，避免字段漂移）。 */
+function partToText(part) {
+  if (part.kind === "summary") return part.text ?? "";
+  if (part.kind === "unknowns") return (part.items ?? []).join("\n");
+  return [
+    part.impact ? "影响：" + part.impact : "",
+    part.action ? "建议：" + part.action : "",
+    part.evidence?.length ? "证据：\n" + part.evidence.join("\n") : "",
+  ].filter(Boolean).join("\n");
+}
 function copyButton(text, label) {
   const button=element("button","⧉","icon-button"); button.type="button";
   button.setAttribute("aria-label",label);setTip(button,label);
@@ -952,6 +962,10 @@ async function loadAdvisory(lane, selected=null) {
         const summary=element("summary",undefined,"report-heading");
         summary.append(element("strong",part.title));
         if(part.confidence) { const badge=element("span",part.confidence,"confidence-badge"); badge.dataset.level=part.confidence; summary.append(badge); }
+        // 复制单条：放折叠头里，点它不触发折叠（stopPropagation）。
+        const copy=copyButton(part.title+"\n"+partToText(part),"复制"+part.title);
+        copy.addEventListener("click",event=>event.stopPropagation());
+        summary.append(copy);
         details.append(summary);
         details.addEventListener("toggle",()=>{
           if(!details.open) {
@@ -978,7 +992,7 @@ async function loadAdvisory(lane, selected=null) {
       }
       const block=element("div",undefined,"assessment-block");
       const head=element("div",undefined,"report-heading");
-      const text=part.kind==="unknowns" ? part.items.join("\n") : part.text;
+      const text=partToText(part);
       head.append(element("strong",part.title),copyButton(part.title+"\n"+text,"复制"+part.title));
       block.append(head,element("p",text));
       node.append(block);
@@ -1480,7 +1494,7 @@ for (const lane of ["product","quality"]) {
   $("close"+cap).addEventListener("click",()=>closeDialog($(lane+"Dialog")));
   $("run"+cap).addEventListener("click",()=>void startAdvisory(lane));
   $(lane+"Reports").addEventListener("change",()=>void loadAdvisory(lane,$(lane+"Reports").value));
-  $(lane+"Copy").addEventListener("click",()=>{const report=currentReports[lane];if(report) void copyText(reportParts(report).map(p=>p.title+"\n"+p.text).join("\n\n"));});
+  $(lane+"Copy").addEventListener("click",()=>{const report=currentReports[lane];if(report) void copyText(reportParts(report).map(p=>p.title+"\n"+partToText(p)).join("\n\n"));});
   $(lane+"Delete").addEventListener("click",()=>void deleteAdvisory(lane,false));
   $(lane+"Clear").addEventListener("click",()=>void deleteAdvisory(lane,true));
 }
