@@ -1,5 +1,72 @@
 import { spawn } from "node:child_process";
+import { appendFile, mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
 import { classifyFailure, LoopFailure } from "./errors.mjs";
+
+/**
+ * gh 子命令白名单：GitHub 的唯一出口。
+ *
+ * 过去 gh() 只是一行透传，另有 12 处调用绕过它直接 run("gh", …)，
+ * 于是「标签/标题/关闭」的规则散落到各个调用点（2026-11-02 的残留标签即由此而来）。
+ * 现在无论从哪条路径调用，都要先过这张表。
+ */
+const GH_ALLOWED = Object.freeze({
+  read: Object.freeze({
+    pr: ["view", "list", "checks", "diff", "status"],
+    issue: ["view", "list"],
+    repo: ["view"],
+    label: ["list"],
+    run: ["list", "view"],
+    release: ["list", "view"],
+    auth: ["status"],
+    api: [],
+  }),
+  write: Object.freeze({
+    pr: ["create", "merge", "close", "comment", "edit"],
+    issue: ["create", "edit", "close", "comment"],
+    label: ["create"],
+    release: ["create"],
+  }),
+});
+
+/** 判断一条 gh 参数是否在白名单内。 */
+export function ghCommandAllowed(args) {
+  const [command, sub] = args;
+  if (command === "--version") return true;
+  if (typeof command !== "string" || typeof sub !== "string") return false;
+  const read = GH_ALLOWED.read[command];
+  const write = GH_ALLOWED.write[command];
+  if (!read && !write) return false;
+  const allowed = [...(read ?? []), ...(write ?? [])];
+  if (command === "api") {
+    // 只放行只读 REST：显式写方法一律拒绝（gh api 默认 GET）。
+    const index = args.findIndex((arg) => arg === "--method" || arg === "-X");
+    const method = index >= 0 ? String(args[index + 1] ?? "").toUpperCase() : "GET";
+    return method === "GET";
+  }
+  return allowed.includes(sub);
+}
+
+/** 审计日志路径；由 config.mjs 在解析出目标项目根后设置。未设置时不记录。 */
+let ghAuditLog = null;
+export function setGhAuditLog(path) {
+  ghAuditLog = path;
+}
+
+function auditGh(cwd, args, outcome) {
+  if (!ghAuditLog) return;
+  const record = JSON.stringify({
+    at: new Date().toISOString(),
+    pid: process.pid,
+    cwd,
+    args: args.slice(0, 12),
+    outcome,
+  });
+  // 审计失败绝不阻塞业务流程；日志位于目标项目的 .soxu/（已被 gitignore）。
+  mkdir(dirname(ghAuditLog), { recursive: true })
+    .then(() => appendFile(ghAuditLog, record + "\n", "utf8"))
+    .catch(() => {});
+}
 
 // On Windows only invoke trusted static .cmd commands through cmd.exe.
 function normalize(bin, args) {
@@ -38,6 +105,10 @@ export async function run(bin, args, { cwd, timeoutMs = 90_000, env = process.en
   }
   if (bin === "gh" && args[0] !== "--version") {
     if (!cwd) throw new Error("GitHub operation requires the target project directory");
+    if (!ghCommandAllowed(args)) {
+      auditGh(cwd, args, "denied");
+      throw new Error("GitHub command is not allowlisted: " + args.slice(0, 2).join(" "));
+    }
     env = {...env};
     for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete env[name];
     if (args.some(arg => arg === "--repo" || arg === "-R" || arg.startsWith("--repo="))) throw new Error("Explicit GitHub repository arguments are not permitted");
@@ -51,6 +122,7 @@ export async function run(bin, args, { cwd, timeoutMs = 90_000, env = process.en
       if (url && url[1].toLowerCase() !== repo.toLowerCase()) throw new Error("GitHub URL does not match target project origin");
     }
     env = {...env, GH_HOST:"github.com", GH_REPO:`github.com/${repo}`};
+    auditGh(cwd, args, "allowed");
   }
   const [cmd, argv] = normalize(bin, args);
   return new Promise((resolve, reject) => {

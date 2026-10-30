@@ -3,6 +3,7 @@ import { loadTaskCatalog, taskIdFromIssueTitle } from "./task-catalog.mjs";
 import { MILESTONE_IN_FIELD, MILESTONE_IN_TITLE, milestoneName, stageIds } from "./milestones.mjs";
 import { mergedIssueNumbers } from "./github-queue.mjs";
 import { readQueueOrder, sortByQueueOrder } from "./queue-order.mjs";
+import { LABELS, STATE_LABELS, TASK_STATE } from "./rules.mjs";
 
 // Remote data is advisory; scheduling remains governed by github-queue.mjs.
 function safePrUrl(value, number) {
@@ -74,14 +75,14 @@ export function buildGithubStatus(catalog, issues, prs, base = "main", queueOrde
     const labels=new Set((issue.labels ?? []).map(l=>l.name));
     if (!stage || !stages[stage]) {if(id || [...labels].some(n=>n.startsWith("agent:"))) unclassified++;continue;}
     const target=stages[stage];target.total++;target.issues.push(issue.number);
-    target.items.push({number:issue.number,title:String(issue.title ?? "").slice(0,160),state:issue.state,url:safeIssueUrl(issue.url,issue.number),labels:[...labels].filter(n=>["agent:blocked","agent:paused","agent:in-progress"].includes(n)),merged:issue.state === "CLOSED" && merged.has(issue.number)});
+    target.items.push({number:issue.number,title:String(issue.title ?? "").slice(0,160),state:issue.state,url:safeIssueUrl(issue.url,issue.number),labels:[...labels].filter(n=>[TASK_STATE.blocked,TASK_STATE.paused,TASK_STATE.inProgress].includes(n)),merged:issue.state === "CLOSED" && merged.has(issue.number)});
     if(merged.has(issue.number))target.merged++;else if(issue.state === "CLOSED") target.unknown++;
-    else if(labels.has("agent:paused") || labels.has("agent:blocked"))target.paused++;
-    else if(labels.has("agent:in-progress"))target.running++;
+    else if(labels.has(TASK_STATE.paused) || labels.has(TASK_STATE.blocked))target.paused++;
+    else if(labels.has(TASK_STATE.inProgress))target.running++;
   }
   tasks.__roadmap={stages:Object.values(stages),unclassified,limited:issues.length>=1000 || prs.length>=1000};
   tasks.__queue = sortByQueueOrder(issues, queueOrder).map(i => ({number:i.number,title:String(i.title ?? "").slice(0,160), state:i.state, merged:merged.has(i.number),
-      labels:(i.labels ?? []).map(l=>l.name).filter(n=>["agent:ready","agent:blocked","agent:waiting","agent:in-progress","agent:paused","agent:pr"].includes(n)),
+      labels:(i.labels ?? []).map(l=>l.name).filter(n=>STATE_LABELS.includes(n)),
       url: safeIssueUrl(i.url,i.number)}));
   return tasks;
 }

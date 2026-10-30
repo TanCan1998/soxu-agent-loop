@@ -12,6 +12,7 @@ import { loadRoleModels, modelArgs } from "./agent-models.mjs";
 import { classifyFailure, isRecoverable, safeFailureMessage, LoopFailure } from "./errors.mjs";
 import { duplicatePrs, similarPrs } from "./duplicate-pr.mjs";
 import { registryFile, sweepProcesses, taskKey } from "./process-registry.mjs";
+import { commitSubject, TASK_STATE } from "./rules.mjs";
 
 const WORKTREES = resolve(ROOT, "../soxu-worktrees");
 const LOCKS = resolve(ROOT, ".soxu", "locks");
@@ -351,7 +352,7 @@ async function runIssuePhases(issue, { policy, local = false, dryRun = false, re
     const roleModels = await pinTaskModels(state,issue.number,
       index => loadRoleModels(process.env,{index}), value => writeCheckpoint(value));
     // 状态互斥：进入执行态时清掉 ready/waiting/paused/blocked/pr 等其它状态，并说明原因。
-    if (!local) await setTaskState(issue.number, "agent:in-progress",
+    if (!local) await setTaskState(issue.number, TASK_STATE.inProgress,
       "SOXU " + (resume ? "恢复执行" : "开始执行") + " #" + issue.number + "（阶段 " + state.phase + "，模型 " +
       (roleModels.developer.provider ?? "Pi default") + "/" + (roleModels.developer.model ?? "inherited") + "）。");
     const base = await integrationBase();
@@ -586,9 +587,9 @@ async function runIssuePhases(issue, { policy, local = false, dryRun = false, re
             if (next !== "commit") { await checkpoint(next); break; }
             // Runner 是唯一有权提交的角色：显式提权，否则会被 pre-commit 的
             // Agent 会话拦截挡住（见 SOXU scripts/check-staged.mjs）。
-            await git(["commit", "-m", `✨ feat(agent): resolve Issue #${issue.number}`], wt.directory,
+            await git(["commit", "-m", commitSubject(issue.number)], wt.directory,
               { env: { ...process.env, SOXU_ALLOW_COMMIT: "1" } });
-          } else if (last !== `✨ feat(agent): resolve Issue #${issue.number}` && state.commit !== current)
+          } else if (last !== commitSubject(issue.number) && state.commit !== current)
             // 恢复路径认回的提交（state.commit === HEAD）保留 agent 自己写的主题；
             // 真正的不变量由下面 verifyCommittedHead 的 parent/tree 校验把关。
             throw new Error("Unexpected HEAD while recovering commit; manual inspection required");
@@ -648,7 +649,7 @@ async function runIssuePhases(issue, { policy, local = false, dryRun = false, re
             throw new LoopFailure("merge", "PR 与集成分支 " + base + " 冲突，需人工处理：" + state.pr + "\n" + detail);
           }
           // 一次调用完成状态切换并附说明：PR 链接、目标分支、是否已请求自动合并。
-          await setTaskState(issue.number, "agent:pr",
+          await setTaskState(issue.number, TASK_STATE.delivered,
             "SOXU 已完成开发与评审，PR 已创建：" + state.pr + "（目标分支 " + base + "）。" +
             (policy.autoMerge ? "已请求自动合并，等待必需检查通过后由 GitHub 合并。" : "自动合并已关闭，需人工合并。"));
           if (policy.autoMerge) {
@@ -712,7 +713,7 @@ async function runIssuePhases(issue, { policy, local = false, dryRun = false, re
     if (!local && failure.kind !== "network") {
       try {
         // 状态切换与说明合并为一次调用，避免"标签改了但没解释"或中途失败留下混合状态。
-        await setTaskState(issue.number, paused ? "agent:paused" : "agent:blocked",
+        await setTaskState(issue.number, paused ? TASK_STATE.paused : TASK_STATE.blocked,
           "SOXU " + (paused ? "已暂停（可恢复）" : "已阻塞") + "，阶段 " + (state?.phase ?? "startup") +
           "；worktree 与检查点已保留。原因：" + failure.kind + "。\n\n" + safeFailureMessage(failure) +
           "\n\n人工恢复：pnpm agent:start（" + (paused ? "暂停" : "阻塞") + "任务会被优先重试）");

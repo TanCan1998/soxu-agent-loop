@@ -1,4 +1,5 @@
 import { ROOT } from "./config.mjs";
+import { TASK_STATE } from "./rules.mjs";
 
 import { milestoneName, stageIds } from "./milestones.mjs";
 
@@ -29,7 +30,7 @@ export function buildLocalRoadmap(tasks, progress) {
       number: task.number,
       title: task.title,
       state: state === "done" ? "CLOSED" : "OPEN",
-      labels: state === "blocked" ? ["agent:blocked"] : state === "paused" ? ["agent:paused"] : state === "running" ? ["agent:in-progress"] : [],
+      labels: state === "blocked" ? [TASK_STATE.blocked] : state === "paused" ? [TASK_STATE.paused] : state === "running" ? [TASK_STATE.inProgress] : [],
       merged: state === "done",
       url: null,
       localStatus: state,

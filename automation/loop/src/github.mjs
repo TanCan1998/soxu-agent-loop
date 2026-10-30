@@ -1,30 +1,26 @@
 import { gh, git, run } from "./process.mjs";
 import { hasRequiredChecks } from "./branch-protection.mjs";
-import { writeFile, mkdtemp, rm } from "node:fs/promises";
+import { readFile, writeFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ROOT } from "./config.mjs";
 import { validIssue } from "./guards.mjs";
-import { loadTaskCatalog, taskIdFromIssueTitle } from "./task-catalog.mjs";
+import { loadTaskCatalog, taskIdFromIssueTitle, withGithubIssue } from "./task-catalog.mjs";
 import { planGithubQueue, mergedIssueNumbers, waitingLabelDowngrades } from "./github-queue.mjs";
 import { readQueueOrder } from "./queue-order.mjs";
+import {
+  closingBody,
+  issueTitle as formatIssueTitle,
+  LABEL_META,
+  LABELS,
+  prTitle,
+  STATE_LABELS,
+  TASK_STATE,
+  validateIssueTitle,
+} from "./rules.mjs";
 
-/**
- * 任务状态标签的唯一来源：名称、颜色、描述。
- * 描述会写进 GitHub 的标签定义，界面上鼠标悬停即可看到语义。
- */
-export const LABEL_META = Object.freeze({
-  "agent:ready":       { color: "287a61", description: "就绪：依赖已满足，等待 agent 认领" },
-  "agent:waiting":     { color: "c2e0c6", description: "等待前置任务：依赖合并后自动转 ready" },
-  "agent:in-progress": { color: "1d76db", description: "执行中：agent 正在开发 / 检查 / 评审" },
-  "agent:paused":      { color: "d4c5f9", description: "已暂停：可恢复，需人工检查后手动恢复" },
-  "agent:blocked":     { color: "b60205", description: "已阻塞：评审或检查连续失败，需人工介入" },
-  "agent:pr":          { color: "0e8a16", description: "已交付：PR 已创建，等待合并与收尾" },
-  "agent:release":     { color: "fbca04", description: "发布标记：由发布流程处理" },
-});
-const LABELS = Object.keys(LABEL_META);
-/** 互斥的状态标签：同一时刻只应存在一个。 */
-const STATE_LABELS = ["agent:ready", "agent:waiting", "agent:in-progress", "agent:paused", "agent:blocked", "agent:pr"];
+// 规则本体在 rules.mjs（loop 自己的工具行为）；这里只做出口，避免出现第二份标签清单。
+export { LABEL_META };
 export async function listIssues({promote = false, base = "main"} = {}) {
   // Both open and closed TASK issues are needed; a PR being created is NOT a merged dependency.
   const text = await gh(["issue", "list", "--state", "all", "--limit", "1000", "--json", "number,title,body,labels,state"], ROOT);
@@ -40,11 +36,11 @@ export async function listIssues({promote = false, base = "main"} = {}) {
   if (promote) {
     // A previously seeded v1.5 ready task may not have had dependency metadata honored.
     for (const issue of waitingLabelDowngrades(values, catalog, ready)) {
-      await labelIssue(issue.number, "agent:waiting", "agent:ready",
+      await labelIssue(issue.number, TASK_STATE.waiting, TASK_STATE.ready,
         "依赖已合入集成分支，SOXU 自动把 #" + issue.number + " 从 agent:ready 改回 agent:waiting 等待重新排期。");
     }
     for (const issue of ready) if (issue.promote) {
-      await labelIssue(issue.number, "agent:ready", "agent:waiting",
+      await labelIssue(issue.number, TASK_STATE.ready, TASK_STATE.waiting,
         "前置任务已全部合入集成分支，SOXU 自动把 #" + issue.number + " 从 agent:waiting 提升为 agent:ready，等待认领。");
     }
   }
@@ -90,10 +86,9 @@ export async function createPr(n, branch, summary, base = "main") {
   const dir = await mkdtemp(join(tmpdir(), "soxu-"));
   try {
     const p = join(dir, "body.md");
-    await writeFile(p, `Autonomous SOXU change for #${n}.\n\n${summary}\n\nCloses #${n}\n`);
-    // PR 标题会成为合并提交的首行，必须符合同一套 <gitmoji> type(scope): 描述 规范，
-  // 否则目标仓库的 commit policy 会在 dev/main 上判定失败。
-  const title = `✨ feat(agent): resolve Issue #${n}`;
+    // 标题与关闭引用都来自 rules.mjs：PR 首行会成为合并提交主题，必须与提交规范同源。
+    await writeFile(p, closingBody(n, summary));
+    const title = prTitle(n);
   return await gh(["pr", "create", "--base", base, "--head", branch, "--title", title, "--body-file", p], ROOT);
   } finally { await rm(dir, { recursive: true, force: true }); }
 }
@@ -119,17 +114,29 @@ export async function seedIssues() {
     if (existing.some(x => taskIdFromIssueTitle(x.title) === task.id)) continue;
     const file = join(ROOT, "tasks", "backlog", `${task.id}.md`);
     // Dependencies are released by listIssues() only after predecessor Issues are CLOSED.
-    const label = task.dependencies.length ? "agent:waiting" : "agent:ready";
+    const label = task.dependencies.length ? TASK_STATE.waiting : TASK_STATE.ready;
     const names={"TASK-001":"实现 Pi RPC 进程管理","TASK-002":"实现项目与会话目录","TASK-003":"构建多会话工作区","TASK-004":"实现进程内存预算","TASK-005":"实现 Worktree 集成","TASK-006":"完善发布就绪检查"};
     if (!task.milestone) throw new Error(`Task ${task.id} has no milestone; refusing to seed an unclassified issue`);
-    await gh(["issue", "create", "--title", `[${task.milestone}] [${task.id}] ${names[task.id] ?? task.title}`, "--body-file", file, "--label", label], ROOT);
-    console.log(`Created Issue ${task.id} (${label})`);
+    const title = formatIssueTitle(task.milestone, task.id, names[task.id] ?? task.title);
+    // 标题不符合 [M?] [TASK-NNN] 语法时立刻失败，而不是让目标仓库的 CI 事后拦。
+    const titleError = validateIssueTitle(title);
+    if (titleError) throw new Error(titleError);
+    const created = await gh(["issue", "create", "--title", title, "--body-file", file, "--label", label], ROOT);
+    // 立即把 Issue 号回填到 frontmatter：checkpoint 按 issue 号存、任务按 TASK 号存，
+    // 缺 githubIssue 会让 localProgress 永远读不到阶段，人工补容易漏（TASK-033~039 就是这样补的）。
+    const issueNumber = Number(/\/issues\/(\d+)/.exec(String(created))?.[1]);
+    if (Number.isFinite(issueNumber) && issueNumber > 0) {
+      await writeFile(file, withGithubIssue(await readFile(file, "utf8"), issueNumber), "utf8");
+      console.log(`Created Issue ${task.id} (${label}) -> #${issueNumber}`);
+    } else {
+      console.warn(`Created Issue ${task.id} (${label}) but could not parse the issue number; fill githubIssue manually`);
+    }
   }
 }
 
 export async function processAuthorizedReleases(p) {
   if (!p.autoRelease) return;
-  const text = await gh(["issue", "list", "--state", "open", "--label", "agent:release", "--limit", "20", "--json", "number,title,body"], ROOT);
+  const text = await gh(["issue", "list", "--state", "open", "--label", TASK_STATE.release, "--limit", "20", "--json", "number,title,body"], ROOT);
   for (const issue of JSON.parse(text)) {
     // Release intent must be explicit, separate from development issues.
     const v = String(issue.body ?? "").match(/(?:^|\n)version:\s*(0\.\d+\.\d+(?:-rc\.\d+)?)(?:\r?\n|$)/);

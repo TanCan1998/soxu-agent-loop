@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp, mkdir, rm, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {parseTaskDocument, loadTaskCatalog, validateTaskCatalog, planTaskQueue, taskIdFromIssueTitle} from '../src/task-catalog.mjs';
+import {parseTaskDocument, loadTaskCatalog, validateTaskCatalog, planTaskQueue, taskIdFromIssueTitle, withGithubIssue} from '../src/task-catalog.mjs';
 import {planGithubQueue, mergedIssueNumbers, waitingLabelDowngrades} from '../src/github-queue.mjs';
 import {localTasks} from '../src/local-queue.mjs';
 import {writeCheckpoint} from '../src/checkpoint.mjs';
@@ -149,4 +149,17 @@ test('legacy incorrectly ready dependent is downgraded without touching human bl
   const ready=planGithubQueue(issues,catalog);
   assert.deepEqual(ready.map(x=>x.number),[10]);
   assert.deepEqual(waitingLabelDowngrades(issues,catalog,ready).map(x=>x.number),[20]);
+});
+
+test("withGithubIssue 回填 idempotent：写入、去重、可被 parseTaskDocument 读回", () => {
+  const body = markdown("TASK-900", "P1", ["TASK-899"]);
+  const once = withGithubIssue(body, 123);
+  assert.match(once, /^---\ngithubIssue: 123\nid: TASK-900/);
+  const parsed = parseTaskDocument("TASK-900.md", once);
+  assert.equal(parsed.githubIssue, 123);
+  assert.equal(parsed.priority, "P1");
+  assert.deepEqual(parsed.dependencies, ["TASK-899"]);
+  const twice = withGithubIssue(once, 456);
+  assert.equal((twice.match(/githubIssue:/g) ?? []).length, 1, "重复回填不能留下两行");
+  assert.equal(parseTaskDocument("TASK-900.md", twice).githubIssue, 456);
 });

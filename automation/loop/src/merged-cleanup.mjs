@@ -5,26 +5,15 @@ import { run } from "./process.mjs";
 import { readCheckpoint, writeCheckpoint } from "./checkpoint.mjs";
 import { taskIdFromIssueTitle } from "./task-catalog.mjs";
 import { runnerStatus } from "./runner-state.mjs";
+import { completeMergedIssue } from "./lifecycle.mjs";
+import {
+  archiveCommitSubject,
+  closingReferences,
+  orphanArchiveCommitSubject,
+  STALE_AFTER_MERGE_LABELS,
+} from "./rules.mjs";
 const samePath = (a,b) => process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 
-// Cleanup is restricted to Runner-owned GitHub tasks with an exact merged PR head.
-/** 合入集成分支后关闭 Issue（幂等；结果缓存在检查点里，避免每轮都问 GitHub）。 */
-async function closeMergedIssue(exec, state, n, base) {
-  if (state.issueClosed === "closed") return "cached";
-  try {
-    const seen = JSON.parse((await exec("gh", ["issue", "view", String(n), "--json", "state"])).stdout);
-    if (seen.state !== "OPEN") { state.issueClosed = "already-closed"; return "already-closed"; }
-    // 关闭前清掉「未完成」状态标签：已合入的任务不该继续挂着 in-progress/paused/blocked。
-    const view = JSON.parse((await exec("gh", ["issue", "view", String(n), "--json", "labels"])).stdout);
-    // agent:pr 也要清：已合入并关闭的 Issue 挂着它会让面板一直显示成"待合并"，
-    // 历史上有 26 个 Issue 因此需要人工清理（2026-10-29）。
-    const stale = (view.labels ?? []).map(x => x.name).filter(name => ["agent:in-progress", "agent:paused", "agent:blocked", "agent:ready", "agent:waiting", "agent:pr"].includes(name));
-    if (stale.length) await exec("gh", ["issue", "edit", String(n), ...stale.flatMap(name => ["--remove-label", name])]);
-    await exec("gh", ["issue", "close", String(n), "--comment", `已合入集成分支 ${base}；release 发布到 main 后随版本生效。`]);
-    state.issueClosed = "closed";
-    return "closed";
-  } catch { return "unknown"; }
-}
 /**
  * 把任务文件从 tasks/backlog 归档到 tasks/done。
  *
@@ -71,7 +60,7 @@ async function archiveTaskFile(root, exec, state, issueNumber, { deferWhenRunner
   try { await access(from); } catch { return null; }
   await mkdir(join(root, "tasks", "done"), { recursive: true });
   await exec("git", ["mv", `tasks/backlog/${taskId}.md`, `tasks/done/${taskId}.md`], { cwd: root });
-  await exec("git", ["commit", "-m", `🔧 chore(tasks): 归档 ${taskId}（#${issueNumber} 已合并）`], { cwd: root });
+  await exec("git", ["commit", "-m", archiveCommitSubject(taskId, issueNumber)], { cwd: root });
   return taskId;
 }
 
@@ -91,7 +80,8 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
       // 这里补一次归档（archiveTaskFile 内部幂等）
       try { await archiveTaskFile(root, execAtRoot, state, Number(id), { deferWhenRunnerActive }); }
       catch (e) { log(`Merged cleanup #${id}: 任务文件归档失败（${e?.message ?? e}），下次重试。`); }
-      if(await closeMergedIssue(execAtRoot, state, Number(id), base) === "closed") await writeCheckpoint(state, checkpointDir);
+      const closedState = await completeMergedIssue(execAtRoot, state, Number(id), base);
+      if(closedState === "closed" || closedState === "already-closed") await writeCheckpoint(state, checkpointDir);
       continue;
     }
     if(state.status!=="done" || state.phase!=="done") continue;
@@ -207,7 +197,8 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
       if(complete) {
       try { result.archivedTask = await archiveTaskFile(root, exec, fresh, n, { deferWhenRunnerActive }); }
       catch (e) { log(`Merged cleanup #${n}: 任务文件归档失败（${e?.message ?? e}），下次重试。`); }
-      result.issueClosed = await closeMergedIssue(exec, fresh, n, base);
+      result.issueClosed = await completeMergedIssue(exec, fresh, n, base);
+      if(result.issueClosed === "closed" || result.issueClosed === "already-closed") await writeCheckpoint(fresh, checkpointDir);
     }
       results.push(result);
       log(`Merged cleanup #${n}: remote=${remoteStatus}, local=${localStatus}`);
@@ -272,8 +263,7 @@ async function archiveOrphanTasks(root, exec, log, signal) {
   const merged = new Set();
   const prs = JSON.parse((await exec("gh",
     ["pr", "list", "--state", "merged", "--limit", "1000", "--json", "body"])).stdout ?? "[]");
-  const re = /(?:^|\n)\s*(?:closes|closed|close|fixes|fixed|fix|resolves|resolved|resolve)\s+#(\d+)\b/gim;
-  for (const pr of prs) for (const m of String(pr.body ?? "").matchAll(re)) merged.add(Number(m[1]));
+  for (const pr of prs) for (const n of closingReferences(pr.body)) merged.add(n);
   const done = [];
   for (const c of selectOrphanTasks(candidates, closed, merged)) {
     if (signal?.aborted) break;
@@ -281,7 +271,7 @@ async function archiveOrphanTasks(root, exec, log, signal) {
     done.push(c.taskId);
   }
   if (done.length) {
-    await exec("git", ["commit", "-m", `🔧 chore(tasks): 归档 ${done.length} 个已完成任务（孤儿扫描）`], { cwd: root });
+    await exec("git", ["commit", "-m", orphanArchiveCommitSubject(done.length)], { cwd: root });
     log(`Archived ${done.length} orphan task(s): ${done.join(", ")}`);
   }
   return done;

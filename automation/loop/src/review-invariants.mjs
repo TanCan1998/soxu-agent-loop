@@ -1,3 +1,5 @@
+import { commitSubject as commitSubjectFor } from "./rules.mjs";
+
 /** A commit is authorized only for the exact tree both tested and approved. */
 export function nextPhaseForTree(phase, state, currentTree) {
   if (!currentTree || currentTree !== state.testedTree) return "checks";
@@ -8,7 +10,7 @@ export function nextPhaseForTree(phase, state, currentTree) {
 
 /** Never trust a recovered commit solely because its subject looks familiar. */
 export function assertRecoveredCommit(state, { head, parent, tree, subject }) {
-  const expectedSubject = `✨ feat(agent): resolve Issue #${state.issue?.number}`;
+  const expectedSubject = commitSubjectFor(state.issue?.number);
   // 主题只是工具写提交时的格式约定，不是安全证据；真正的不变量是
   // parent === base 且 tree 同时等于 testedTree 与 reviewedTree。
   // 恢复路径认回的提交（state.commit === head，见 worker 的 agent-commit-recoverable）

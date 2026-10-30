@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { isAbsolute, resolve, join } from "node:path";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { setGhAuditLog } from "./process.mjs";
 export const TOOL_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 /**
@@ -46,6 +47,10 @@ export function dataRoot(root = ROOT) {
 export async function integrationBase() {
   return (await policy()).integrationBranch ?? "main";
 }
+// gh 审计写到目标项目的 .soxu/logs/gh.jsonl：与 checkpoint 同一数据目录，不进 git。
+try { setGhAuditLog(join(dataRoot(ROOT), "logs", "gh.jsonl")); }
+catch { /* 外部数据目录未初始化时跳过审计，不阻塞命令 */ }
+
 export async function policy() {
   const value = JSON.parse(await readFile(resolve(ROOT, "automation/policy.json"), "utf8"));
   for (const name of ["maxConcurrentAgents", "maxRoundsPerInvocation", "maxRetries", "maxChangedFiles", "maxChangedBytes"]) {

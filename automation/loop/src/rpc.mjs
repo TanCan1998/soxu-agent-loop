@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { LoopFailure, classifyFailure } from "./errors.mjs";
 import { modelArgs } from "./agent-models.mjs";
@@ -37,6 +40,11 @@ function safeEnvironment(extra = {}) {
   env.SOXU_AGENT_SESSION = "1";
   delete env.SOXU_ALLOW_COMMIT;
   for (const key of ["GH_TOKEN", "GITHUB_TOKEN", "ATOMGIT_TOKEN", "GIT_ASKPASS", "SSH_ASKPASS", "AWS_SECRET_ACCESS_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]) delete env[key];
+  // 删环境变量挡不住 gh：token 存在 keyring / hosts.yml 里（2026-11-02 实测 gh auth status 仍通过）。
+  // 把 GH_CONFIG_DIR 指到一个空目录，Agent 侧的 gh 就是「未登录」，任何写操作都会失败。
+  const isolated = process.env.SOXU_AGENT_GH_CONFIG_DIR || join(tmpdir(), "soxu-agent-gh-config-empty");
+  try { mkdirSync(isolated, { recursive: true }); } catch { /* 目录不可用时 gh 同样没有凭据，安全方向不变 */ }
+  env.GH_CONFIG_DIR = isolated;
   return env;
 }
 
