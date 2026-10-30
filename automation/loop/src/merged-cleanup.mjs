@@ -4,6 +4,7 @@ import { join, resolve, relative } from "node:path";
 import { run } from "./process.mjs";
 import { readCheckpoint, writeCheckpoint } from "./checkpoint.mjs";
 import { taskIdFromIssueTitle } from "./task-catalog.mjs";
+import { runnerStatus } from "./runner-state.mjs";
 const samePath = (a,b) => process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 
 // Cleanup is restricted to Runner-owned GitHub tasks with an exact merged PR head.
@@ -53,7 +54,16 @@ async function taskIdForIssue(root, state, issueNumber) {
   return null;
 }
 
-async function archiveTaskFile(root, exec, state, issueNumber) {
+async function archiveTaskFile(root, exec, state, issueNumber, { deferWhenRunnerActive = false } = {}) {
+  // 归档会往集成分支提交一个 commit。若有 runner 正在跑，它的 worktree 基点
+  // 可能还是旧 commit，提交会让它下次同步时撞车。
+  // 只在 dashboard 的独立定时器里跳过；runner 内部的 cleanup 自己就是那个 runner，不能跳。
+  if (deferWhenRunnerActive) {
+    try {
+      const status = await runnerStatus(root);
+      if (status?.active) return { skipped: "runner-active" };
+    } catch { /* 读不到 runner 状态就按空闲处理 */ }
+  }
   const taskId = await taskIdForIssue(root, state, issueNumber);
   if (!taskId) return null;
   const from = join(root, "tasks", "backlog", taskId + ".md");
@@ -65,7 +75,7 @@ async function archiveTaskFile(root, exec, state, issueNumber) {
   return taskId;
 }
 
-export async function cleanupMergedTasks(root, { execute=run, log=console.log, signal, base = "main" }={}) {
+export async function cleanupMergedTasks(root, { execute=run, log=console.log, signal, base = "main", deferWhenRunnerActive = false }={}) {
   const checkpointDir=join(dataRoot(root),"checkpoints"), lockDir=join(root,".soxu","locks");
   let files;try { files=await readdir(checkpointDir); } catch(e) {if(e.code==="ENOENT")return [];throw e;}
   const ids=[...new Set(files.map(x=>/^(?:github-)?issue-(\d+)\.json$/.exec(x)?.[1]).filter(Boolean))];
@@ -79,7 +89,7 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
     if(state.status==="done" && state.phase==="done" && state.cleanup?.complete) {
       // 历史 checkpoint 可能已经 cleanup.complete 但任务文件还留在 backlog，
       // 这里补一次归档（archiveTaskFile 内部幂等）
-      try { await archiveTaskFile(root, execAtRoot, state, Number(id)); }
+      try { await archiveTaskFile(root, execAtRoot, state, Number(id), { deferWhenRunnerActive }); }
       catch (e) { log(`Merged cleanup #${id}: 任务文件归档失败（${e?.message ?? e}），下次重试。`); }
       if(await closeMergedIssue(execAtRoot, state, Number(id), base) === "closed") await writeCheckpoint(state, checkpointDir);
       continue;
@@ -195,7 +205,7 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
       fresh.cleanup={complete,remote:remoteStatus,local:localStatus,checkedAt:new Date().toISOString()};await writeCheckpoint(fresh,checkpointDir);
       const result={issue:n,status:complete?"cleaned":"preserved",remote:remoteStatus,local:localStatus};
       if(complete) {
-      try { result.archivedTask = await archiveTaskFile(root, exec, fresh, n); }
+      try { result.archivedTask = await archiveTaskFile(root, exec, fresh, n, { deferWhenRunnerActive }); }
       catch (e) { log(`Merged cleanup #${n}: 任务文件归档失败（${e?.message ?? e}），下次重试。`); }
       result.issueClosed = await closeMergedIssue(exec, fresh, n, base);
     }

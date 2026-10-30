@@ -342,7 +342,7 @@ export class DashboardCoordinator extends EventEmitter {
   refreshCleanup() {
     if(this.cleanupController.signal.aborted || this.cleanupPending || Date.now()<this.cleanupNext)return;
     this.cleanupNext=Date.now()+60000;
-    this.cleanupPending=Promise.resolve(integrationBase()).then(base=>cleanupMergedTasks(this.root,{signal:this.cleanupController.signal,log:message=>this.push(message),base})).catch(e=>this.push(`Merged cleanup unavailable: ${e.message}`)).finally(()=>{this.cleanupPending=null;});
+    this.cleanupPending=Promise.resolve(integrationBase()).then(base=>cleanupMergedTasks(this.root,{signal:this.cleanupController.signal,log:message=>this.push(message),base,deferWhenRunnerActive:true})).catch(e=>this.push(`Merged cleanup unavailable: ${e.message}`)).finally(()=>{this.cleanupPending=null;});
   }
   /**
    * 从 .soxu/runner 最新的日志文件回填一次日志。
