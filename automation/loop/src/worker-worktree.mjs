@@ -4,7 +4,7 @@
  * 从 worker.mjs 拆出（2026-11-02）。这里只关心「文件系统与 Git 状态」，
  * 不涉及模型调用，因此可以独立测试与复用。
  */
-import { open, readFile, rm, mkdir, realpath } from "node:fs/promises";
+import { open, readFile, rm, mkdir, realpath, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { ROOT } from "./config.mjs";
 import { git, run } from "./process.mjs";
