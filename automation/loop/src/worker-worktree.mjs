@@ -7,7 +7,7 @@
 import { open, readFile, rm, mkdir, realpath, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { ROOT } from "./config.mjs";
-import { git, run } from "./process.mjs";
+import { allowPolicyCommands, git, run } from "./process.mjs";
 import { slug } from "./guards.mjs";
 
 export const WORKTREES = resolve(ROOT, "../soxu-worktrees");
@@ -95,6 +95,8 @@ export async function worktreeFor(issue, local, state, base = "main") {
 }
 
 export async function runChecks(cwd, policy, signal) {
+  // 先登记 policy 里声明的命令：Windows 的 pnpm 白名单只放行这些（外加 loop 内置三条）。
+  allowPolicyCommands(policy.checks);
   for (const check of policy.checks) {
     console.log(`gate: ${check.bin} ${check.args.join(" ")}`);
     await run(check.bin, check.args, { cwd, timeoutMs: check.timeoutMinutes * 60_000, signal });
