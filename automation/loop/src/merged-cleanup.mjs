@@ -68,6 +68,8 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
   const checkpointDir=join(dataRoot(root),"checkpoints"), lockDir=join(root,".soxu","locks");
   let files;try { files=await readdir(checkpointDir); } catch(e) {if(e.code==="ENOENT")return [];throw e;}
   const ids=[...new Set(files.map(x=>/^(?:github-)?issue-(\d+)\.json$/.exec(x)?.[1]).filter(Boolean))];
+  /** 本轮真正归档过的任务 id：只有它们才会产生待推送的归档提交。 */
+  const archivedTaskIds = [];
   const results=[];let repository;
   const execAtRoot=(bin,args)=>execute(bin,args,{cwd:root,timeoutMs:45000,signal});
   for(const id of ids) {
@@ -78,7 +80,7 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
     if(state.status==="done" && state.phase==="done" && state.cleanup?.complete) {
       // 历史 checkpoint 可能已经 cleanup.complete 但任务文件还留在 backlog，
       // 这里补一次归档（archiveTaskFile 内部幂等）
-      try { await archiveTaskFile(root, execAtRoot, state, Number(id), { deferWhenRunnerActive }); }
+      try { const archived = await archiveTaskFile(root, execAtRoot, state, Number(id), { deferWhenRunnerActive }); if (typeof archived === "string") archivedTaskIds.push(archived); }
       catch (e) { log(`Merged cleanup #${id}: 任务文件归档失败（${e?.message ?? e}），下次重试。`); }
       const closedState = await completeMergedIssue(execAtRoot, state, Number(id), base);
       if(closedState === "closed" || closedState === "already-closed") await writeCheckpoint(state, checkpointDir);
@@ -195,7 +197,7 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
       fresh.cleanup={complete,remote:remoteStatus,local:localStatus,checkedAt:new Date().toISOString()};await writeCheckpoint(fresh,checkpointDir);
       const result={issue:n,status:complete?"cleaned":"preserved",remote:remoteStatus,local:localStatus};
       if(complete) {
-      try { result.archivedTask = await archiveTaskFile(root, exec, fresh, n, { deferWhenRunnerActive }); }
+      try { result.archivedTask = await archiveTaskFile(root, exec, fresh, n, { deferWhenRunnerActive }); if (typeof result.archivedTask === "string") archivedTaskIds.push(result.archivedTask); }
       catch (e) { log(`Merged cleanup #${n}: 任务文件归档失败（${e?.message ?? e}），下次重试。`); }
       result.issueClosed = await completeMergedIssue(exec, fresh, n, base);
       if(result.issueClosed === "closed" || result.issueClosed === "already-closed") await writeCheckpoint(fresh, checkpointDir);
@@ -214,13 +216,52 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
   //
   // 这里直接扫 tasks/backlog：有 githubIssue 字段、issue 已关闭、且有 merged PR
   // 引用它的任务，一律归档。与 checkpoint 生命周期彻底解耦。
+  let orphaned = [];
   try {
-    const orphaned = await archiveOrphanTasks(root, execAtRoot, log, signal);
+    orphaned = await archiveOrphanTasks(root, execAtRoot, log, signal);
     if (orphaned.length) results.push({ status: "archived-orphans", tasks: orphaned });
   } catch (error) {
     log("Orphan task archival failed; will retry next run: " + (error?.message ?? error));
   }
+  // 归档会在本地集成分支上留下 commit。不推的话，本地会领先 origin，
+  // 下次 worktree 基点、依赖检查与实际远端状态就对不上（2026-10-31 出现过 2/2 分叉）。
+  const archivedAny = archivedTaskIds.length > 0 || orphaned.length > 0;
+  if (archivedAny) {
+    const pushed = await pushArchiveCommits(execAtRoot, root, base, log).catch(error => ({ pushed: false, reason: "unexpected", error: String(error?.message ?? error).slice(0, 200) }));
+    if (pushed.pushed) log(`Pushed ${pushed.ahead} archive commit(s) to origin/${base}`);
+    else if (pushed.reason !== "nothing-to-push") log(`Archive commit(s) kept locally (${pushed.reason}); inspect before pushing.`);
+    results.push({ status: "archive-push", ...pushed });
+  }
   return results;
+}
+
+/**
+ * 把本地归档提交快进推送到集成分支。
+ *
+ * 只在「当前分支就是集成分支、本地领先、且不落后」时推送：
+ * - 落后说明远端有别人/别的任务的新提交，先同步再推；
+ * - 分叉（既领先又落后）绝不 force push，保留现场交给人工。
+ * 归档只是任务文件的移动，推送失败不影响清理结果，下次运行会重试。
+ */
+export async function pushArchiveCommits(exec, root, base, log = console.log) {
+  const gitAt = (args, timeoutMs = 45000) => exec("git", args, { cwd: root, timeoutMs });
+  let head;
+  try { head = String((await gitAt(["rev-parse", "--abbrev-ref", "HEAD"])).stdout).trim(); }
+  catch { return { pushed: false, reason: "head-unreadable" }; }
+  if (head !== base) return { pushed: false, reason: "not-on-base", head };
+  try { await gitAt(["fetch", "origin", base], 60000); }
+  catch { return { pushed: false, reason: "fetch-failed" }; }
+  let behind, ahead;
+  try {
+    const counts = String((await gitAt(["rev-list", "--left-right", "--count", `origin/${base}...HEAD`])).stdout).trim().split(/\s+/).map(Number);
+    [behind, ahead] = counts;
+  } catch { return { pushed: false, reason: "count-unreadable" }; }
+  if (!Number.isInteger(ahead) || !Number.isInteger(behind)) return { pushed: false, reason: "count-unreadable" };
+  if (ahead === 0) return { pushed: false, reason: "nothing-to-push" };
+  if (behind > 0) return { pushed: false, reason: "diverged", ahead, behind };
+  try { await gitAt(["push", "origin", `HEAD:${base}`], 60000); }
+  catch (error) { return { pushed: false, reason: "push-failed", error: String(error?.message ?? error).slice(0, 200) }; }
+  return { pushed: true, ahead };
 }
 
 /**
