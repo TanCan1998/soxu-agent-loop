@@ -22,7 +22,16 @@ export {
   prepareCheckRepair,
   releasePinnedModelsAfterManualStop,
 } from "./worker-recovery.mjs";
-import { prepareCheckRepair } from "./worker-recovery.mjs";
+// re-export 只做转发，不会在本模块创建绑定：内部调用必须显式 import，
+// 否则运行到那条分支才抛 "X is not defined"（2026-11-02 #143 卡在 worktree 阶段即此原因）。
+import {
+  applyReviewRejection,
+  beginBlockedRetry,
+  enforcePriorFindings,
+  pinTaskModels,
+  prepareCheckRepair,
+  releasePinnedModelsAfterManualStop,
+} from "./worker-recovery.mjs";
 
 // 工作树/锁/检查命令已拆到 worker-worktree.mjs，PR 生命周期已拆到 worker-pr.mjs。
 import { acquire, runChecks, worktreeFor } from "./worker-worktree.mjs";
