@@ -7,7 +7,9 @@ export class LoopFailure extends Error {
   }
 }
 const QUOTA = /(?:insufficient[_ -]?(?:quota|credits|balance)|(?:quota|credits|balance)\s+(?:exhausted|exceeded|depleted)|billing[_ -]?(?:hard[_ -]?limit|limit|error)|(?:rate[_ -]?limit|too many requests)|(?:HTTP\s*)?429\b|resource_exhausted|usage[_ -]?limit|out of credits|credit limit reached)/i;
-const NETWORK = /(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|ENOTFOUND|EHOSTUNREACH|fetch failed|network(?: is)? unreachable|connection (?:error|reset|refused|closed|timed out)|socket hang up|TLS handshake|temporary failure in name resolution|gateway timeout|(?:HTTP\s*)?50[234]\b|(?:HTTP\s*)?408\b)/i;
+// 「unexpected EOF」是 gh 在 TLS 抖动或连接被中途切断时的典型输出（2026-10-31 因此把一个
+// 已通过检查的任务判成 blocked）。EOF 类错误一律算网络问题：可恢复、值得重试。
+const NETWORK = /(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|ENOTFOUND|EHOSTUNREACH|fetch failed|network(?: is)? unreachable|connection (?:error|reset|refused|closed|timed out)|socket hang up|TLS handshake|temporary failure in name resolution|gateway timeout|unexpected EOF|early EOF|stream error|http2: |(?:HTTP\s*)?50[234]\b|(?:HTTP\s*)?408\b)/i;
 const AUTH = /(?:invalid[_ -]?api[_ -]?key|authentication failed|unauthorized|invalid credentials|(?:HTTP\s*)?401\b|(?:HTTP\s*)?403\b)/i;
 export function classifyFailure(err) {
   if (err?.kind) return err;
