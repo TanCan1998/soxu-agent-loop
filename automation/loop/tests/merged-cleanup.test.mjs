@@ -44,11 +44,11 @@ test("auto-closed issue (Closes #N) still gets stale agent labels cleared, once"
       if (args[0] === "issue" && args[1] === "close") throw new Error("already-closed issue must not be closed twice");
       throw new Error("unexpected command: " + args.join(" "));
     };
-    await cleanupMergedTasks(root, { execute, base: "dev", log: () => {} });
+    await cleanupMergedTasks(root, { execute, base: "dev", log: () => {}, syncBase: false });
     assert.ok(calls.some(c => c.startsWith("gh issue edit 90") && c.includes("--remove-label agent:blocked")), "stale labels must be removed: " + calls.join(" | "));
     assert.ok(!calls.some(c => c.startsWith("gh issue close")), "must not close an already-closed issue");
     calls.length = 0;
-    await cleanupMergedTasks(root, { execute, base: "dev", log: () => {} });
+    await cleanupMergedTasks(root, { execute, base: "dev", log: () => {}, syncBase: false });
     assert.equal(calls.length, 0, "cleaned terminal state is cached in the checkpoint");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -84,12 +84,12 @@ test("cleanup closes the issue even when the worktree was already cleaned", asyn
       if (args[0] === "issue" && args[1] === "close") return { stdout: "" };
       throw new Error("unexpected command: " + args.join(" "));
     };
-    const results = await cleanupMergedTasks(root, { execute, base: "dev", log: () => {} });
+    const results = await cleanupMergedTasks(root, { execute, base: "dev", log: () => {}, syncBase: false });
     assert.equal(results.length, 0, "already-cleaned task does no git work");
     assert.ok(calls.some(c => c.startsWith("gh issue close 74")), "issue must be closed: " + calls.join(" | "));
     assert.equal((await readCheckpoint(74, checkpointDir, false)).issueClosed, "closed");
     calls.length = 0;
-    await cleanupMergedTasks(root, { execute, base: "dev", log: () => {} });
+    await cleanupMergedTasks(root, { execute, base: "dev", log: () => {}, syncBase: false });
     assert.equal(calls.length, 0, "closed state is cached in the checkpoint");
   } finally { await rm(root, { recursive: true, force: true }); }
 });

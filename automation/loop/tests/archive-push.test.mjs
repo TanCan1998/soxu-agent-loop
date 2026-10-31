@@ -11,7 +11,7 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run } from "../src/process.mjs";
-import { pushArchiveCommits } from "../src/merged-cleanup.mjs";
+import { pushArchiveCommits, syncBaseForArchive } from "../src/merged-cleanup.mjs";
 
 async function fixture(fn) {
   const tmp = await mkdtemp(join(tmpdir(), "soxu-archive-push-"));
@@ -77,6 +77,40 @@ test("分叉（既领先又落后）绝不 force push，保留现场", () => fix
   assert.equal(result.behind, 1);
   const remoteAfter = (await x.git(["rev-parse", "dev"], x.remote)).stdout.trim();
   assert.equal(remoteAfter, remoteBefore, "分叉时远端不能被改写");
+}));
+
+test("归档前落后远端：先快进，再提交（否则归档提交永远基于旧基点）", () => fixture(async (x) => {
+  // 远端前进一个提交，本地落后 1、领先 0。
+  await writeFile(join(x.seed, "remote-advance.md"), "r\n");
+  await x.git(["add", "remote-advance.md"], x.seed);
+  await x.git(["commit", "-m", "🔧 chore: remote advance"], x.seed);
+  await x.git(["push", "origin", "dev"], x.seed);
+  const remoteHead = (await x.git(["rev-parse", "dev"], x.remote)).stdout.trim();
+  const result = await syncBaseForArchive(x.exec, x.work, "dev", () => {});
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(result.reason, "fast-forwarded");
+  const localHead = (await x.git(["rev-parse", "dev"], x.work)).stdout.trim();
+  assert.equal(localHead, remoteHead, "本地必须快进到远端");
+}));
+
+test("归档前已是最新：什么都不做", () => fixture(async (x) => {
+  const result = await syncBaseForArchive(x.exec, x.work, "dev", () => {});
+  assert.equal(result.ok, true);
+  assert.equal(result.reason, "up-to-date");
+}));
+
+test("归档前已分叉：返回 ok=false 让调用方跳过归档，不自动 rebase", () => fixture(async (x) => {
+  await commitFile(x, "TASK-904.md", "local");
+  await writeFile(join(x.seed, "remote-only-2.md"), "r\n");
+  await x.git(["add", "remote-only-2.md"], x.seed);
+  await x.git(["commit", "-m", "🔧 chore: remote advance"], x.seed);
+  await x.git(["push", "origin", "dev"], x.seed);
+  const localBefore = (await x.git(["rev-parse", "dev"], x.work)).stdout.trim();
+  const result = await syncBaseForArchive(x.exec, x.work, "dev", () => {});
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "diverged");
+  const localAfter = (await x.git(["rev-parse", "dev"], x.work)).stdout.trim();
+  assert.equal(localAfter, localBefore, "分叉时不能改写本地历史");
 }));
 
 test("当前不在集成分支时不推送", () => fixture(async (x) => {

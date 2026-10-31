@@ -64,7 +64,7 @@ async function archiveTaskFile(root, exec, state, issueNumber, { deferWhenRunner
   return taskId;
 }
 
-export async function cleanupMergedTasks(root, { execute=run, log=console.log, signal, base = "main", deferWhenRunnerActive = false }={}) {
+export async function cleanupMergedTasks(root, { execute=run, log=console.log, signal, base = "main", deferWhenRunnerActive = false, syncBase = true }={}) {
   const checkpointDir=join(dataRoot(root),"checkpoints"), lockDir=join(root,".soxu","locks");
   let files;try { files=await readdir(checkpointDir); } catch(e) {if(e.code==="ENOENT")return [];throw e;}
   const ids=[...new Set(files.map(x=>/^(?:github-)?issue-(\d+)\.json$/.exec(x)?.[1]).filter(Boolean))];
@@ -72,6 +72,13 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
   const archivedTaskIds = [];
   const results=[];let repository;
   const execAtRoot=(bin,args)=>execute(bin,args,{cwd:root,timeoutMs:45000,signal});
+  // 归档会往集成分支提交。提交之前先把本地分支对齐远端：
+  // 否则归档提交落在过期基点上 → 本地领先且落后 → 永远分叉、永远推不上去
+  // （2026-10-31 连续两次这样分叉）。分叉无法自动修时宁可不归档，也不加重分叉。
+  // syncBase=false 只给「不涉及 git 的聚焦用例」使用，生产路径永远为 true。
+  const sync = syncBase ? await syncBaseForArchive(execAtRoot, root, base, log) : { ok: true, reason: "skipped" };
+  if (sync.ok === false) results.push({ status: "archive-sync", ...sync });
+  const canArchive = sync.ok !== false;
   for(const id of ids) {
     if(signal?.aborted) break;
     const state=await readCheckpoint(Number(id),checkpointDir,false);
@@ -80,7 +87,10 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
     if(state.status==="done" && state.phase==="done" && state.cleanup?.complete) {
       // 历史 checkpoint 可能已经 cleanup.complete 但任务文件还留在 backlog，
       // 这里补一次归档（archiveTaskFile 内部幂等）
-      try { const archived = await archiveTaskFile(root, execAtRoot, state, Number(id), { deferWhenRunnerActive }); if (typeof archived === "string") archivedTaskIds.push(archived); }
+      try {
+        const archived = canArchive ? await archiveTaskFile(root, execAtRoot, state, Number(id), { deferWhenRunnerActive }) : null;
+        if (typeof archived === "string") archivedTaskIds.push(archived);
+      }
       catch (e) { log(`Merged cleanup #${id}: 任务文件归档失败（${e?.message ?? e}），下次重试。`); }
       const closedState = await completeMergedIssue(execAtRoot, state, Number(id), base);
       if(closedState === "closed" || closedState === "already-closed") await writeCheckpoint(state, checkpointDir);
@@ -197,7 +207,10 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
       fresh.cleanup={complete,remote:remoteStatus,local:localStatus,checkedAt:new Date().toISOString()};await writeCheckpoint(fresh,checkpointDir);
       const result={issue:n,status:complete?"cleaned":"preserved",remote:remoteStatus,local:localStatus};
       if(complete) {
-      try { result.archivedTask = await archiveTaskFile(root, exec, fresh, n, { deferWhenRunnerActive }); if (typeof result.archivedTask === "string") archivedTaskIds.push(result.archivedTask); }
+      try {
+        result.archivedTask = canArchive ? await archiveTaskFile(root, exec, fresh, n, { deferWhenRunnerActive }) : null;
+        if (typeof result.archivedTask === "string") archivedTaskIds.push(result.archivedTask);
+      }
       catch (e) { log(`Merged cleanup #${n}: 任务文件归档失败（${e?.message ?? e}），下次重试。`); }
       result.issueClosed = await completeMergedIssue(exec, fresh, n, base);
       if(result.issueClosed === "closed" || result.issueClosed === "already-closed") await writeCheckpoint(fresh, checkpointDir);
@@ -218,7 +231,7 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
   // 引用它的任务，一律归档。与 checkpoint 生命周期彻底解耦。
   let orphaned = [];
   try {
-    orphaned = await archiveOrphanTasks(root, execAtRoot, log, signal);
+    orphaned = canArchive ? await archiveOrphanTasks(root, execAtRoot, log, signal) : [];
     if (orphaned.length) results.push({ status: "archived-orphans", tasks: orphaned });
   } catch (error) {
     log("Orphan task archival failed; will retry next run: " + (error?.message ?? error));
@@ -233,6 +246,45 @@ export async function cleanupMergedTasks(root, { execute=run, log=console.log, s
     results.push({ status: "archive-push", ...pushed });
   }
   return results;
+}
+
+/**
+ * 归档前对齐集成分支：先推掉纯领先的归档提交，再把落后的部分快进。
+ *
+ * 三步都以「不改写历史」为前提：
+ * 1. 本地只领先（ahead>0 && behind==0）→ 推送，清空待推队列；
+ * 2. 只落后（behind>0 && ahead==0）→ `git merge --ff-only`；
+ * 3. 既领先又落后 → 返回 `{ok:false, reason:"diverged"}`，调用方跳过本次归档。
+ *
+ * 不自动 rebase：集成分支上可能有别人未推送的提交，改写历史必须由人决定。
+ */
+export async function syncBaseForArchive(exec, root, base, log = console.log) {
+  const gitAt = (args, timeoutMs = 45000) => exec("git", args, { cwd: root, timeoutMs });
+  let head;
+  try { head = String((await gitAt(["rev-parse", "--abbrev-ref", "HEAD"])).stdout).trim(); }
+  catch { return { ok: true, reason: "head-unreadable" }; }
+  if (head !== base) return { ok: true, reason: "not-on-base", head };
+  const pushed = await pushArchiveCommits(exec, root, base, log);
+  if (pushed.pushed) log(`Pushed ${pushed.ahead} pending archive commit(s) to origin/${base}`);
+  if (pushed.reason === "diverged") {
+    log(`Local ${base} diverged from origin (ahead ${pushed.ahead}, behind ${pushed.behind}); skipping archival this round. Rebase or push manually, then run cleanup again.`);
+    return { ok: false, reason: "diverged", ahead: pushed.ahead, behind: pushed.behind };
+  }
+  try { await gitAt(["fetch", "origin", base], 60000); } catch { return { ok: true, reason: "fetch-failed" }; }
+  let behind = 0, ahead = 0;
+  try {
+    [behind, ahead] = String((await gitAt(["rev-list", "--left-right", "--count", `origin/${base}...HEAD`])).stdout).trim().split(/\s+/).map(Number);
+  } catch { return { ok: true, reason: "count-unreadable" }; }
+  if (!Number.isInteger(ahead) || !Number.isInteger(behind)) return { ok: true, reason: "count-unreadable" };
+  if (behind === 0) return { ok: true, reason: ahead === 0 ? "up-to-date" : "push-failed" };
+  if (ahead > 0) {
+    log(`Local ${base} diverged from origin (ahead ${ahead}, behind ${behind}); skipping archival this round.`);
+    return { ok: false, reason: "diverged", ahead, behind };
+  }
+  try { await gitAt(["merge", "--ff-only", `origin/${base}`], 60000); }
+  catch { return { ok: true, reason: "ff-merge-failed" }; }
+  log(`Fast-forwarded ${base} to origin/${base} before archival`);
+  return { ok: true, reason: "fast-forwarded", behind };
 }
 
 /**
