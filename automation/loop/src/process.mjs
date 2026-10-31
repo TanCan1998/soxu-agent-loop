@@ -68,19 +68,47 @@ function auditGh(cwd, args, outcome) {
     .catch(() => {});
 }
 
+/**
+ * Windows 上 pnpm 只能通过 cmd.exe 调用（.cmd 包装器），因此必须白名单。
+ *
+ * 白名单的来源分两类：
+ * 1. loop 自己固定的三条（版本、安装、pnpm check）；
+ * 2. 目标项目 automation/policy.json 里声明的 checks —— 它们是所有者受保护路径下的
+ *    项目事实，天然可信。2026-11-02 TASK-033 就卡在这里：policy 在 10-30 新增了
+ *    `pnpm --filter @soxu/desktop exec vite build`，而白名单还是硬编码三条，
+ *    结果 Windows 上直接 "pnpm command not allowlisted" 判为 blocked。
+ */
+const POLICY_PNPM_COMMANDS = new Map();
+
+/** 注册目标项目 policy 里声明的 pnpm 检查命令（幂等）。 */
+export function allowPolicyCommands(checks = []) {
+  for (const check of checks) {
+    if (!check || check.bin !== "pnpm" || !Array.isArray(check.args) || check.args.length === 0) continue;
+    if (!check.args.every((arg) => typeof arg === "string" && arg.length > 0 && arg.length <= 200)) continue;
+    POLICY_PNPM_COMMANDS.set(JSON.stringify(check.args), "pnpm " + check.args.join(" "));
+  }
+}
+
+/** 该 pnpm 参数是否被允许（供测试与诊断使用）。 */
+export function pnpmCommandAllowed(args) {
+  return BUILTIN_PNPM_COMMANDS.has(JSON.stringify(args)) || POLICY_PNPM_COMMANDS.has(JSON.stringify(args));
+}
+
+const BUILTIN_PNPM_COMMANDS = new Map([
+  [JSON.stringify(["check"]), "pnpm check"],
+  [JSON.stringify(["--version"]), "pnpm --version"],
+  [JSON.stringify(["install", "--no-frozen-lockfile", "--ignore-scripts"]), "pnpm install --no-frozen-lockfile --ignore-scripts"],
+]);
+
 // On Windows only invoke trusted static .cmd commands through cmd.exe.
 function normalize(bin, args) {
   if (process.platform !== "win32") return [bin, args];
   if (bin === "pi" && ["--help", "--list-models"].includes(args[0]) && args.length === 1) return ["cmd.exe", ["/d", "/s", "/c", `pi ${args[0]}`]];
   if (bin !== "pnpm") return [bin, args];
   const key = JSON.stringify(args);
-  const commands = new Map([
-    [JSON.stringify(["check"]), "pnpm check"],
-    [JSON.stringify(["--version"]), "pnpm --version"],
-    [JSON.stringify(["install", "--no-frozen-lockfile", "--ignore-scripts"]), "pnpm install --no-frozen-lockfile --ignore-scripts"]
-  ]);
-  if (!commands.has(key)) throw new Error("Windows pnpm command not allowlisted");
-  return ["cmd.exe", ["/d", "/s", "/c", commands.get(key)]];
+  const command = BUILTIN_PNPM_COMMANDS.get(key) ?? POLICY_PNPM_COMMANDS.get(key);
+  if (!command) throw new Error("Windows pnpm command not allowlisted");
+  return ["cmd.exe", ["/d", "/s", "/c", command]];
 }
 
 function killGroup(child) {
