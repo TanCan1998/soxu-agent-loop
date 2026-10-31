@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
 
-const APP = await readFile(new URL("../web/app.js", import.meta.url), "utf8");
+// app.js 按域拆成 12 个片段（web/js/app-*.js），共享同一全局作用域：
+// 测试把它们按 index.html 的加载顺序拼接后放进一个 vm 上下文，与浏览器行为等价。
+const APP_PARTS = await Promise.all(["base", "infra", "logs", "render", "stream", "copy", "theme", "drafts", "nav", "models", "publish", "boot"]
+  .map(async name => "/* ==== js/app-" + name + ".js ==== */\n" + await readFile(new URL("../web/js/app-" + name + ".js", import.meta.url), "utf8")));
+const APP = APP_PARTS.join("\n");
 const TOKEN = "a".repeat(48);
 const TOKEN_STORAGE_KEY = "soxu.dashboard.sessionToken.v1";
 const STATUS = {
@@ -397,7 +401,7 @@ test("large model catalog limits rendered rows and keeps search available",async
 });
 
 test("auto merge is policy-driven; the UI switch is gone", async () => {
-  const source = await readFile(new URL("../web/app.js", import.meta.url), "utf8");
+  const source = APP;
   assert.doesNotMatch(source, /autoMerge|auto-merge/, "the switch and its endpoint must not be wired in the UI");
   const html = await readFile(new URL("../web/index.html", import.meta.url), "utf8");
   assert.doesNotMatch(html, /id="autoMerge"/);
@@ -687,7 +691,7 @@ test("milestone detail distinguishes all six task states", async () => {
 });
 
 test("confirmations use the in-page dialog instead of native confirm/prompt/alert", async () => {
-  const source = await readFile(new URL("../web/app.js", import.meta.url), "utf8");
+  const source = APP;
   assert.doesNotMatch(source, /(?<![\w.])confirm\(/, "native confirm() must not be used");
   assert.doesNotMatch(source, /(?<![\w.])prompt\(/, "native prompt() must not be used");
   assert.doesNotMatch(source, /(?<![\w.])alert\(/, "native alert() must not be used");
