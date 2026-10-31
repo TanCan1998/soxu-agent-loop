@@ -8,11 +8,31 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ROOT } from "./config.mjs";
 import { git, run } from "./process.mjs";
-import { LoopFailure, safeFailureMessage } from "./errors.mjs";
+import { LoopFailure, classifyFailure, safeFailureMessage } from "./errors.mjs";
+
+/**
+ * 对「网络类」失败做有界重试：gh/git 的 TLS 抖动不该让一个已完成评审的任务变成 blocked。
+ * 只重试 classifyFailure 判为 network 的错误；其它错误立刻抛出，不掩盖真问题。
+ */
+export async function retryTransient(fn, { attempts = 3, baseDelayMs = 800, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      const kind = classifyFailure(error).kind;
+      if (kind !== "network" || attempt === attempts - 1) throw error;
+      await sleep(baseDelayMs * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
 export async function inspectPr(prUrl) {
-  const { stdout } = await run("gh", ["pr", "view", prUrl,
+  // 合并阶段会反复轮询 PR 状态；单次网络抖动不能终止整个任务。
+  const { stdout } = await retryTransient(() => run("gh", ["pr", "view", prUrl,
     "--json", "state,mergeable,mergeStateStatus,mergedAt,mergeCommit,headRefName,baseRefName"],
-    { cwd: ROOT, timeoutMs: 45000 });
+    { cwd: ROOT, timeoutMs: 45000 }));
   return JSON.parse(stdout);
 }
 
