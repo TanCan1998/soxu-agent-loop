@@ -7,6 +7,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { classifyFailure, isRecoverable } from "../src/errors.mjs";
 import { retryTransient } from "../src/worker-pr.mjs";
 
@@ -51,6 +52,12 @@ test("retryTransient 不重试非网络错误", async () => {
     /invalid-body/,
   );
   assert.equal(calls, 1, "业务错误必须立刻抛出");
+});
+
+test("调用模型前的重复 PR 检查也走网络重试（否则一次抖动就暂停任务）", async () => {
+  const source = await readFile(new URL("../src/worker.mjs", import.meta.url), "utf8");
+  assert.match(source, /retryTransient\(\(\) => run\("gh", \["pr", "list"/, "重复 PR 预检查必须重试网络错误");
+  assert.match(source, /Cannot verify open PRs before model call/, "重试用尽后仍要 fail-closed 暂停");
 });
 
 test("retryTransient 用尽次数后抛出最后一次错误", async () => {

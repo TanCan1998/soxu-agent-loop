@@ -35,7 +35,7 @@ import {
 
 // 工作树/锁/检查命令已拆到 worker-worktree.mjs，PR 生命周期已拆到 worker-pr.mjs。
 import { acquire, runChecks, worktreeFor } from "./worker-worktree.mjs";
-import { attemptConflictRecovery, inspectPr, waitForMerged } from "./worker-pr.mjs";
+import { attemptConflictRecovery, inspectPr, retryTransient, waitForMerged } from "./worker-pr.mjs";
 
 function reportTaskPhase(taskId, phase, status = "running") {
   if (typeof process.send === "function" && process.connected) {
@@ -206,7 +206,9 @@ async function runIssuePhases(issue, { policy, local = false, dryRun = false, re
             // Recheck before every paid Developer call, including resume/repair.
             let prs;
             try {
-              const result = await run("gh", ["pr", "list", "--state", "open", "--base", base, "--limit", "1000", "--json", "number,title,state,body,url,headRefName,baseRefName"], {cwd:ROOT, timeoutMs:policy.timeouts.networkSeconds * 1000, signal});
+              // 网络抖动不该让任务停下来：先按既有退避重试，仍然失败才暂停（保持 fail-closed，
+              // 绝不假定「没有重复 PR」）。2026-10-31 TASK-035 就因为一次查询失败被暂停。
+              const result = await retryTransient(() => run("gh", ["pr", "list", "--state", "open", "--base", base, "--limit", "1000", "--json", "number,title,state,body,url,headRefName,baseRefName"], {cwd:ROOT, timeoutMs:policy.timeouts.networkSeconds * 1000, signal}));
               prs = JSON.parse(result.stdout);
               if (!Array.isArray(prs) || prs.length >= 1000) throw new Error("PR results incomplete");
             } catch (error) {
