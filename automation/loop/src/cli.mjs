@@ -16,7 +16,7 @@ import { cleanupMergedTasks } from "./merged-cleanup.mjs";
 import { writeRunnerState, recordRunnerExitSync, runnerLogPath } from "./runner-state.mjs";
 import { teeStdioToFile } from "./runner-log.mjs";
 import { checkUpdate, applyUpdate } from "./update.mjs";
-import { partitionRecoveryCandidates } from "./blocked-recovery.mjs";
+import { partitionRecoveryCandidates, resetBlockedRecovery } from "./blocked-recovery.mjs";
 import { safeFailureMessage } from "./errors.mjs";
 
 // Register before any command runs: `start` is awaited at top level, so a hook at the
@@ -48,6 +48,7 @@ Commands:
   watch        Poll GitHub tasks (bounded by policy; no --local or --dry-run)
   say          Execute a natural-language recovery instruction
   update       Fast-forward the tool checkout (hot update); add --check to only compare
+  reset-blocked Clear the blocked-retry counter for one issue (--issue N) after fixing the cause
   pid-register Register a long-running pid for this task (--pid, optional --command)
   pid-sweep    Reclaim the pids registered for this task (--key or SOXU_TASK_KEY)
   help         Show this help
@@ -260,6 +261,26 @@ switch (command) {
       console.log(`  #${row.issue} 未核实：${why}`);
     }
     if(results.some(x=>["error","invalid-checkpoint"].includes(x.status))) process.exitCode=1; break; }
+  case "reset-blocked": {
+    // 人工确认根因已修复后清零重试计数。只接受显式 --issue，不提供批量重置。
+    const index = args.indexOf("--issue");
+    const issueNumber = index >= 0 ? Number(args[index + 1]) : NaN;
+    if (!Number.isSafeInteger(issueNumber) || issueNumber <= 0) {
+      console.error("reset-blocked 需要 --issue <编号>");
+      process.exitCode = 2; break;
+    }
+    const checkpointDir = join(dataRoot(ROOT), "checkpoints");
+    const state = await readCheckpoint(issueNumber, checkpointDir, local);
+    if (!state) { console.error("没有 #" + issueNumber + " 的检查点"); process.exitCode = 1; break; }
+    const outcome = resetBlockedRecovery(state);
+    if (!outcome.reset) {
+      console.log("#" + issueNumber + ": 重试计数已是 0（status=" + state.status + ", phase=" + state.phase + "）");
+      break;
+    }
+    await writeCheckpoint(state, checkpointDir);
+    console.log("#" + issueNumber + ": blockedRecoveryCount " + outcome.before + " → 0（status=" + state.status + ", phase=" + state.phase + "）");
+    break;
+  }
   case "doctor": await doctor(); break;
   case "status": {
     const checkpointDir = join(dataRoot(ROOT), "checkpoints");
