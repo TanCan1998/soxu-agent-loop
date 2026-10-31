@@ -196,10 +196,10 @@ async function runIssuePhases(issue, { policy, local = false, dryRun = false, re
       switch (state.phase) {
         case "install":
           console.log("Installing isolated worktree dependencies (ignore lifecycle scripts)");
-          await run("pnpm", ["install", "--no-frozen-lockfile", "--ignore-scripts"], { cwd: wt.directory, timeoutMs: policy.timeouts.installMinutes * 60000, signal });
+          await run("pnpm", ["install", "--no-frozen-lockfile", "--ignore-scripts", "--prefer-offline"], { cwd: wt.directory, timeoutMs: policy.timeouts.installMinutes * 60000, signal });
           await checkpoint("develop"); break;
         case "recoveryInstall":
-          await run("pnpm", ["install", "--no-frozen-lockfile", "--ignore-scripts"], { cwd: wt.directory, timeoutMs: policy.timeouts.installMinutes * 60000, signal });
+          await run("pnpm", ["install", "--no-frozen-lockfile", "--ignore-scripts", "--prefer-offline"], { cwd: wt.directory, timeoutMs: policy.timeouts.installMinutes * 60000, signal });
           await checkpoint("checks"); break;
         case "develop": {
           if (!local) {
@@ -298,7 +298,7 @@ async function runIssuePhases(issue, { policy, local = false, dryRun = false, re
             }
             if (markers.exitCode > 1) throw new Error("conflict-marker scan failed: " + (markers.stderr ?? ""));
           }
-          await run("pnpm", ["install", "--no-frozen-lockfile", "--ignore-scripts"], {
+          await run("pnpm", ["install", "--no-frozen-lockfile", "--ignore-scripts", "--prefer-offline"], {
             cwd: wt.directory, timeoutMs: policy.timeouts.installMinutes * 60000, signal,
           });
           // Preserve syncBackup in checkpoint. Review still runs after checks.

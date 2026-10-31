@@ -97,7 +97,10 @@ export function pnpmCommandAllowed(args) {
 const BUILTIN_PNPM_COMMANDS = new Map([
   [JSON.stringify(["check"]), "pnpm check"],
   [JSON.stringify(["--version"]), "pnpm --version"],
+  // --prefer-offline：worktree 每次 resume 都要装依赖，复用 pnpm store 可显著缩短时间；
+  // 旧参数保留在白名单里，避免回滚到未加该参数的版本时被拦。
   [JSON.stringify(["install", "--no-frozen-lockfile", "--ignore-scripts"]), "pnpm install --no-frozen-lockfile --ignore-scripts"],
+  [JSON.stringify(["install", "--no-frozen-lockfile", "--ignore-scripts", "--prefer-offline"]), "pnpm install --no-frozen-lockfile --ignore-scripts --prefer-offline"],
 ]);
 
 // On Windows only invoke trusted static .cmd commands through cmd.exe.
