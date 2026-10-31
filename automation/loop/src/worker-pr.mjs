@@ -4,9 +4,11 @@
  * 从 worker.mjs 拆出（2026-11-02）。`gh pr merge --auto` 只是「请求自动合并」，
  * 这些函数负责把「请求」变成「确认」。
  */
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { ROOT } from "./config.mjs";
 import { git, run } from "./process.mjs";
-import { LoopFailure } from "./errors.mjs";
+import { LoopFailure, safeFailureMessage } from "./errors.mjs";
 export async function inspectPr(prUrl) {
   const { stdout } = await run("gh", ["pr", "view", prUrl,
     "--json", "state,mergeable,mergeStateStatus,mergedAt,mergeCommit,headRefName,baseRefName"],
